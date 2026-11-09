@@ -1,0 +1,35 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
+import { Store } from '../src/store.js';
+
+test('passwords and sessions are hashed; accounts persist across restarts', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'shifr-store-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const path = join(dir, 'db.sqlite');
+  let store = new Store(path);
+  const user = await store.register('Alice', 'correct-password-123');
+  assert.ok(user);
+  assert.equal(user.nickname, 'alice');
+  assert.equal(await store.register('ALICE', 'another-password-123'), null);
+  assert.equal(await store.login('alice', 'incorrect-password'), null);
+  assert.equal(await store.login('missing', 'correct-password-123'), null);
+  const { token } = store.createSession(user, 60);
+  const raw = new DatabaseSync(path);
+  const row = raw.prepare('SELECT password_hash, salt FROM users').get()!;
+  assert.notEqual(row.password_hash, 'correct-password-123');
+  assert.equal(String(row.password_hash).length, 128);
+  assert.notEqual(raw.prepare('SELECT token_hash FROM sessions').get()!.token_hash, token);
+  raw.close();
+  store.close();
+  store = new Store(path);
+  t.after(() => store.close());
+  assert.deepEqual(await store.login('ALICE', 'correct-password-123'), user);
+  assert.deepEqual(store.getSession(token)?.user, user);
+  store.revoke(token);
+  assert.equal(store.getSession(token), null);
+  assert.equal(store.getSession(store.createSession(user, -1).token), null);
+});

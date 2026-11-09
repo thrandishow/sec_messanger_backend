@@ -1,0 +1,31 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { X509Certificate } from 'node:crypto';
+
+test('LAN setup creates a trusted certificate chain and refuses to overwrite secrets', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'shifr-setup-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const script = resolve('scripts/setup.mjs');
+  const run = (ip: string) => spawnSync(process.execPath, [script, '--ip', ip], { cwd: dir, encoding: 'utf8' });
+  assert.equal(run('8.8.8.8').status, 1);
+  const generated = run('192.168.1.10');
+  assert.equal(generated.status, 0, generated.stderr);
+  const env = readFileSync(join(dir, '.env'), 'utf8');
+  const token = env.match(/^REGISTRATION_TOKEN=(.*)$/m)![1]!;
+  assert.equal(token.length, 64);
+  assert.equal(generated.stdout.includes(token), false);
+  assert.equal(statSync(join(dir, '.env')).mode & 0o777, 0o600);
+  const cert = new X509Certificate(readFileSync(join(dir, 'runtime/tls/server.crt')));
+  const ca = new X509Certificate(readFileSync(join(dir, 'runtime/tls/ca.crt')));
+  assert.equal(ca.ca, true);
+  assert.equal(cert.ca, false);
+  assert.equal(cert.verify(ca.publicKey), true);
+  assert.equal(cert.checkIP('192.168.1.10'), '192.168.1.10');
+  assert.equal(cert.checkHost('localhost'), 'localhost');
+  assert.equal(run('192.168.1.20').status, 1);
+  assert.equal(readFileSync(join(dir, '.env'), 'utf8'), env);
+});

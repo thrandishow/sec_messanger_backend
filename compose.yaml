@@ -1,0 +1,54 @@
+name: shifr-svyaz
+services:
+  inspircd:
+    image: shifr-svyaz-inspircd:4.12.1
+    build:
+      context: .
+      dockerfile: docker/inspircd/Dockerfile
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    volumes:
+      - ./runtime/irc-connect.conf:/run/shifr/irc-connect.conf:ro
+    networks: [local]
+
+  api:
+    image: shifr-svyaz-api:0.1.0
+    build: .
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8443
+      IRC_HOST: inspircd
+      IRC_PORT: 6667
+      DATABASE_PATH: /app/data/shifr.sqlite
+      TLS_CERT_PATH: /app/runtime/tls/server.crt
+      TLS_KEY_PATH: /app/runtime/tls/server.key
+    ports:
+      - "${LAN_IP:?Run setup with your LAN IP}:8443:8443"
+    volumes:
+      - ./runtime/tls:/app/runtime/tls:ro
+      - ./data:/app/data
+    depends_on:
+      inspircd:
+        condition: service_healthy
+    networks: [local, lan]
+
+networks:
+  local:
+    internal: true
+  # A separate bridge is needed for replies to clients outside the Docker host.
+  # Only the explicit LAN_IP:8443 binding is published.
+  lan:
+    driver: bridge
