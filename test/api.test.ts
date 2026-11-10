@@ -23,6 +23,8 @@ test('registration, login, cookie session, and logout work without exposing secr
   assert.match(String(register.headers['set-cookie']), /SameSite=Strict/);
   const me = await app.inject({ url: '/api/auth/me', headers: { cookie } });
   assert.equal(me.statusCode, 200);
+  assert.deepEqual((await app.inject({ url: '/api/chat/status', headers: { cookie } })).json(), { connected: false });
+  assert.equal((await app.inject({ url: '/api/chat/status' })).statusCode, 401);
   const duplicate = await app.inject({ method: 'POST', url: '/api/auth/register', headers,
     payload: { ...credentials, invitation: config.registrationToken } });
   assert.equal(duplicate.statusCode, 409);
@@ -35,6 +37,18 @@ test('registration, login, cookie session, and logout work without exposing secr
   assert.equal((await app.inject({ method: 'POST', url: '/api/auth/logout', headers: { ...headers, cookie } })).statusCode, 204);
   assert.equal((await app.inject({ url: '/api/auth/me', headers: { cookie } })).statusCode, 401);
   assert.equal((await app.inject({ url: '/api/auth/me' })).statusCode, 401);
+});
+
+test('private single-hop proxy preserves client IP checks and separates rate limits', async t => {
+  const config = testConfig({ trustProxy: true });
+  const app = await buildApp(config);
+  t.after(() => app.close());
+  assert.equal((await app.inject({ url: '/health/live', remoteAddress: '172.20.0.2',
+    headers: { 'x-forwarded-for': '8.8.8.8' } })).statusCode, 403);
+  for (let i = 0; i < 11; i++) await app.inject({ method: 'POST', url: '/api/auth/login',
+    remoteAddress: '172.20.0.2', headers: { origin: config.origins[0]!, 'x-forwarded-for': '192.168.1.10' }, payload: {} });
+  assert.equal((await app.inject({ method: 'POST', url: '/api/auth/login', remoteAddress: '172.20.0.2',
+    headers: { origin: config.origins[0]!, 'x-forwarded-for': '192.168.1.11' }, payload: {} })).statusCode, 400);
 });
 
 test('CSRF, origin allowlist, public IPs, and request size are enforced', async t => {

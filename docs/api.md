@@ -3,7 +3,9 @@
 Базовый адрес: `https://<LAN-IP>:8443`. JSON в UTF-8. Браузер отправляет cookie
 через `credentials: 'include'`. POST требует точный `Origin` из `ALLOWED_ORIGINS`,
 в том числе при использовании curl. Сервер не принимает публичные IP и игнорирует
-`X-Forwarded-For`. Ответы API не кешируются.
+`X-Forwarded-For` при прямом запуске. В Compose приватный Nginx перезаписывает
+этот заголовок, а API доверяет одному локальному прокси (`TRUST_PROXY=1`).
+Ответы API не кешируются.
 
 ## HTTP
 
@@ -15,6 +17,7 @@
 | POST | `/api/auth/register` | `{nickname,password,invitation}` → `201 {user,expiresAt}` + cookie |
 | POST | `/api/auth/login` | `{nickname,password}` → `200 {user,expiresAt}` + cookie |
 | GET | `/api/auth/me` | `200 {user,expiresAt}` или `401` |
+| GET | `/api/chat/status` | Авторизация обязательна; `{ "connected": true/false }` — есть ли активный чат у этого аккаунта |
 | POST | `/api/auth/logout` | Без тела → `204`, отзыв текущей сессии и закрытие её WSS |
 
 `user`: `{ "id": "uuid", "nickname": "alice" }`. `expiresAt` — Unix timestamp

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
@@ -31,7 +31,7 @@ async function portReady(port: number) {
     if (ok) return;
     await new Promise(resolve => setTimeout(resolve, 50));
   }
-  throw new Error('InspIRCd did not start with the project configuration');
+  throw new Error('Test listener did not start with the project configuration');
 }
 
 function inbox(ws: WebSocket) {
@@ -63,11 +63,15 @@ test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and
   const dir = mkdtempSync(join(tmpdir(), 'shifr-integration-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const ircPort = await freePort();
+  const proxied = process.env.SHIFR_TEST_PROXY === '1';
+  if (proxied) assert.ok(process.env.NGINX_BINARY, 'Set NGINX_BINARY to a local Nginx executable');
+  const proxyPort = proxied ? await freePort() : 3000;
   assert.equal(spawnSync(process.execPath, [resolve('scripts/setup.mjs'), '--ip', '192.168.1.10'],
     { cwd: dir, stdio: 'ignore' }).status, 0);
   const ca = readFileSync(join(dir, 'runtime/tls/ca.crt'));
   const config = loadConfig({ ...parseEnv(readFileSync(join(dir, '.env'), 'utf8')),
-    HOST: '127.0.0.1', IRC_PORT: String(ircPort), ALLOWED_ORIGINS: 'https://127.0.0.1:3000',
+    HOST: '127.0.0.1', IRC_PORT: String(ircPort), ALLOWED_ORIGINS: `https://127.0.0.1:${proxyPort}`,
+    TRUST_PROXY: proxied ? '1' : '0',
     TLS_CERT_PATH: join(dir, 'runtime/tls/server.crt'), TLS_KEY_PATH: join(dir, 'runtime/tls/server.key'),
     DATABASE_PATH: join(dir, 'db.sqlite') });
   const connectFile = join(dir, 'runtime/irc-connect.conf');
@@ -86,7 +90,31 @@ test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and
   const app = await buildApp(config);
   t.after(() => app.close());
   await app.listen({ host: '127.0.0.1', port: 0 });
-  const port = (app.server.address() as { port: number }).port;
+  const apiPort = (app.server.address() as { port: number }).port;
+  const port = proxied ? proxyPort : apiPort;
+  if (proxied) {
+    const frontDir = resolve(process.env.SHIFR_FRONT_DIR ?? '../project_front');
+    const nginxConfig = readFileSync(join(frontDir, 'nginx.conf'), 'utf8')
+      .replace('worker_processes auto;', 'worker_processes 1;')
+      .replace('include /etc/nginx/mime.types;', 'types { text/html html; application/javascript js; text/css css; image/svg+xml svg; }')
+      .replace('listen 8443 ssl;', `listen 127.0.0.1:${port} ssl;`)
+      .replaceAll('/tmp/', `${dir}/`)
+      .replaceAll('/tls/', `${dir}/runtime/tls/`)
+      .replace('/usr/share/nginx/html', `${frontDir}/out`)
+      .replace('https://api:8443', `https://127.0.0.1:${apiPort}`);
+    mkdirSync(join(dir, 'logs'));
+    const nginxFile = join(dir, 'nginx.conf');
+    writeFileSync(nginxFile, nginxConfig);
+    const syntax = spawnSync(process.env.NGINX_BINARY!, ['-t', '-p', dir, '-c', nginxFile], { encoding: 'utf8' });
+    assert.equal(syntax.status, 0, syntax.stderr);
+    const nginx = spawn(process.env.NGINX_BINARY!, ['-p', dir, '-c', nginxFile, '-g', 'daemon off;'], { stdio: 'ignore' });
+    t.after(async () => {
+      if (nginx.exitCode === null && nginx.signalCode === null) {
+        const exited = once(nginx, 'exit'); nginx.kill('SIGTERM'); await exited;
+      }
+    });
+    await portReady(port);
+  }
   const origin = config.origins[0]!;
   const http = (path: string, payload?: unknown, cookie?: string, trusted = true) => new Promise<{
     status: number; body: string; cookie: string; setCookie: string;
@@ -102,6 +130,18 @@ test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and
     req.end(payload === undefined ? undefined : JSON.stringify(payload));
   });
   assert.equal((await http('/health/ready')).status, 200);
+  if (proxied) {
+    const page = await http('/');
+    assert.equal(page.status, 200);
+    assert.match(page.body, /Шифр-связь/);
+    const scripts = [...page.body.matchAll(/src="([^"\s]+\.js[^"\s]*)"/g)].map(match => match[1]!);
+    assert.ok(scripts.length > 0, 'Next.js JavaScript bundles are present');
+    for (const path of scripts) {
+      assert.ok(path.startsWith('/_next/static/'), 'JavaScript is served locally');
+      assert.equal((await http(path)).status, 200);
+    }
+    assert.equal((await http('/health/frontend')).status, 200);
+  }
   await assert.rejects(http('/health/live', undefined, undefined, false), /certificate|self.signed/i);
   const register = async (nickname: string) => {
     const result = await http('/api/auth/register', { nickname, password: 'test-password-123', invitation: config.registrationToken });
@@ -111,6 +151,7 @@ test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and
   };
   const aliceCookie = await register('alice');
   const bobCookie = await register('bob');
+  assert.equal(JSON.parse((await http('/api/chat/status', undefined, aliceCookie)).body).connected, false);
   const rejectedWs = (cookie: string, requestOrigin: string | undefined, status: number) => new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(`wss://127.0.0.1:${port}/ws`, { ca, headers: { cookie }, origin: requestOrigin });
     ws.on('error', () => {});
@@ -127,6 +168,7 @@ test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and
   const aliceEvents = inbox(alice);
   t.after(() => alice.terminate());
   assert.equal((await aliceEvents.wait(e => e.type === 'ready')).type, 'ready');
+  assert.equal(JSON.parse((await http('/api/chat/status', undefined, aliceCookie)).body).connected, true);
   const bob = new WebSocket(`wss://127.0.0.1:${port}/ws`, { ca, origin, headers: { cookie: bobCookie } });
   const bobEvents = inbox(bob);
   t.after(() => bob.terminate());

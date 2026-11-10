@@ -23,6 +23,7 @@ const envSchema = z.object({
   IRC_PASSWORD: z.string().regex(/^[a-f0-9]{64}$/),
   REGISTRATION_TOKEN: z.string().regex(/^[a-f0-9]{64}$/),
   SESSION_TTL_SECONDS: z.coerce.number().int().min(60).max(604800).default(86400),
+  TRUST_PROXY: z.enum(['0', '1']).default('0'),
 });
 
 export type Config = ReturnType<typeof loadConfig>;
@@ -54,5 +55,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     tlsCert: e.TLS_CERT_PATH, tlsKey: e.TLS_KEY_PATH, secureCookies: tls,
     ircHost: e.IRC_HOST, ircPort: e.IRC_PORT, ircPassword: e.IRC_PASSWORD,
     registrationToken: e.REGISTRATION_TOKEN, sessionTtlSeconds: e.SESSION_TTL_SECONDS,
+    trustProxy: e.TRUST_PROXY === '1',
   };
 }

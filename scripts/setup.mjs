@@ -58,7 +58,7 @@ PORT=8443
 LAN_IP=${ip}
 LOCAL_UID=${process.getuid?.() || 1000}
 LOCAL_GID=${process.getgid?.() || 1000}
-ALLOWED_ORIGINS=https://${ip}:3000,https://${ip}:8443,https://localhost:3000,https://127.0.0.1:3000
+ALLOWED_ORIGINS=https://${ip}:3000,https://${ip}:8443,https://localhost:3000,https://127.0.0.1:3000,https://localhost:8443,https://127.0.0.1:8443
 DATABASE_PATH=./data/shifr.sqlite
 TLS_CERT_PATH=./runtime/tls/server.crt
 TLS_KEY_PATH=./runtime/tls/server.key
@@ -67,6 +67,7 @@ IRC_PORT=6667
 IRC_PASSWORD=${ircPassword}
 REGISTRATION_TOKEN=${registrationToken}
 SESSION_TTL_SECONDS=86400
+TRUST_PROXY=0
 `, { mode: 0o600, flag: 'wx' });
 console.log(`Configuration created for https://${ip}:8443. Secrets are in .env (not printed).
 Trust runtime/tls/ca.crt on LAN clients. Keep all .key files on the server only.

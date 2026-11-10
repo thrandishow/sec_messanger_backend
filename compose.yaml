@@ -10,7 +10,7 @@ services:
     init: true
     read_only: true
     cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
+    security_opt: ["no-new-privileges:true"]
     tmpfs: [/tmp]
     volumes:
       - ./runtime/irc-connect.conf:/run/shifr/irc-connect.conf:ro
@@ -24,7 +24,7 @@ services:
     init: true
     read_only: true
     cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
+    security_opt: ["no-new-privileges:true"]
     tmpfs: [/tmp]
     env_file: .env
     environment:
@@ -35,13 +35,32 @@ services:
       DATABASE_PATH: /app/data/shifr.sqlite
       TLS_CERT_PATH: /app/runtime/tls/server.crt
       TLS_KEY_PATH: /app/runtime/tls/server.key
-    ports:
-      - "${LAN_IP:?Run setup with your LAN IP}:8443:8443"
+      TRUST_PROXY: '1'
     volumes:
       - ./runtime/tls:/app/runtime/tls:ro
       - ./data:/app/data
     depends_on:
       inspircd:
+        condition: service_healthy
+    networks: [local]
+
+  web:
+    image: shifr-svyaz-web:0.1.0
+    build:
+      context: ../project_front
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: [/tmp]
+    ports:
+      - "${LAN_IP:?Run ./start.sh with your LAN IP}:8443:8443"
+    volumes:
+      - ./runtime/tls:/tls:ro
+    depends_on:
+      api:
         condition: service_healthy
     networks: [local, lan]
 

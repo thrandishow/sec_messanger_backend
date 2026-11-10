@@ -1,0 +1,13 @@
+# Separate file: the initial setup must run before the main Compose reads .env.
+name: shifr-svyaz-setup
+services:
+  setup:
+    image: shifr-svyaz-setup:0.1.0
+    build:
+      context: .
+      dockerfile: docker/setup/Dockerfile
+    volumes:
+      - .:/work
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]

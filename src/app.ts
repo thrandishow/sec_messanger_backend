@@ -19,7 +19,8 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
   const app = Fastify({
     logger: options.logger ? { redact: ['req.headers.cookie', 'req.headers.authorization', 'req.body', 'res.headers["set-cookie"]'] } : false,
     logController: new LogController({ disableRequestLogging: true }),
-    trustProxy: false,
+    // Enabled only behind our unexposed, single-hop Nginx proxy, which overwrites X-Forwarded-For.
+    trustProxy: config.trustProxy ? (address, hop) => hop === 0 && isLocalAddress(address) : false,
     bodyLimit: 4096,
     requestTimeout: 10_000,
     ...(config.tlsCert && config.tlsKey ? { https: { cert: readFileSync(config.tlsCert), key: readFileSync(config.tlsKey) } } : {}),
@@ -87,6 +88,11 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
   app.get('/api/auth/me', async (request, reply) => {
     const session = sessionFrom(request.cookies[COOKIE_NAME]);
     return session ? { user: session.user, expiresAt: session.expiresAt } : reply.code(401).send({ error: 'UNAUTHORIZED' });
+  });
+  app.get('/api/chat/status', async (request, reply) => {
+    const session = sessionFrom(request.cookies[COOKIE_NAME]);
+    if (!session) return reply.code(401).send({ error: 'UNAUTHORIZED' });
+    return { connected: active.has(session.user.id) };
   });
   app.post('/api/auth/logout', async (request, reply) => {
     const token = request.cookies[COOKIE_NAME];
