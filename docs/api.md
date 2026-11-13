@@ -1,106 +1,112 @@
-# API v1
+# API v2
 
-Базовый адрес: `https://<LAN-IP>:8443`. JSON в UTF-8. Браузер отправляет cookie
-через `credentials: 'include'`. POST требует точный `Origin` из `ALLOWED_ORIGINS`,
-в том числе при использовании curl. Сервер не принимает публичные IP и игнорирует
-`X-Forwarded-For` при прямом запуске. В Compose приватный Nginx перезаписывает
-этот заголовок, а API доверяет одному локальному прокси (`TRUST_PROXY=1`).
-Ответы API не кешируются.
+Адрес: `https://<LAN-IP>:8443`. JSON в UTF-8, cookie с `credentials: 'include'`.
+Изменяющие запросы требуют точный Origin из `ALLOWED_ORIGINS`. Ответы не кешируются.
+В Compose IP клиента берётся только от одного доверенного Nginx, который
+перезаписывает X-Forwarded-For. API не принимает публичные IP.
 
 ## HTTP
 
 | Метод | Путь | Тело / результат |
 | --- | --- | --- |
-| GET | `/health/live` | `200 {"status":"ok"}` — API работает |
-| GET | `/health/ready` | `200 {"status":"ok","irc":true}` или `503`; проверка TCP-доступности IRC |
-| GET | `/api/config` | Название, версия протокола, лимит сообщения, наличие истории и E2EE |
-| POST | `/api/auth/register` | `{nickname,password,invitation}` → `201 {user,expiresAt}` + cookie |
-| POST | `/api/auth/login` | `{nickname,password}` → `200 {user,expiresAt}` + cookie |
-| GET | `/api/auth/me` | `200 {user,expiresAt}` или `401` |
-| GET | `/api/chat/status` | Авторизация обязательна; `{ "connected": true/false }` — есть ли активный чат у этого аккаунта |
-| POST | `/api/auth/logout` | Без тела → `204`, отзыв текущей сессии и закрытие её WSS |
+| GET | `/health/live` | `{status:"ok"}` |
+| GET | `/health/ready` | `{status:"ok",irc:true}` либо HTTP 503 |
+| GET | `/api/config` | protocolVersion=2, registration=admin, history=true, fileMaxBytes=10485760, messageMaxBytes=350, endToEndEncryption=false |
+| POST | `/api/auth/register` | Всегда 403 REGISTRATION_CLOSED |
+| POST | `/api/auth/login` | `{nickname,password}` → `{user,expiresAt}` + cookie |
+| GET | `/api/auth/me` | `{user,expiresAt}` |
+| POST | `/api/auth/logout` | 204; отзыв текущей сессии |
+| GET | `/api/chat/status` | `{connected:boolean}` |
+| GET | `/api/directory` | `{channels:[{channel,name}],users:[{nickname}],conversations:[nickname]}`; доступные чаты и активные аккаунты |
+| GET | `/api/history?target=…&before=…` | `{messages,nextBefore}`; target URL-encoded, before необязательный ID, до 50 сообщений в порядке возрастания ID |
+| GET | `/api/resources` | `{files:[{id,name,size,created_at}]}` |
+| POST | `/api/files?scope=chat&target=…&name=…` | Бинарное тело application/octet-stream, до 10 МиБ → 201 `{file:{id,name,size}}` |
+| POST | `/api/files?scope=resource&name=…` | Публикация ресурса модератором/администратором; тот же бинарный формат |
+| GET | `/api/files/:id` | Скачивание с авторизацией и проверкой доступа; application/octet-stream, Content-Disposition: attachment |
+| POST | `/api/resources/:id/delete` | Модератор/администратор, 204 |
+| GET | `/api/admin/users` | Администратор: `{users,departments}` |
+| POST | `/api/admin/users` | `{nickname,password,role,department}` → 201 `{user}`; department — канал отдела или null |
+| POST | `/api/admin/users/:id` | `{role,department,active,password?}` → `{user}`; сессии пользователя отзываются |
+| POST | `/api/admin/departments` | `{channel:"#finance",name:"Финансы"}` → 201; системные каналы зарезервированы |
+| GET | `/api/admin/audit?before=…` | `{entries,nextBefore}`; до 100 событий в порядке убывания ID |
 
-`user`: `{ "id": "uuid", "nickname": "alice" }`. `expiresAt` — Unix timestamp
-в миллисекундах. Пароль: 12–128 символов. Приглашение — значение
-`REGISTRATION_TOKEN`, введённое пользователем. По умолчанию сессия действует 24 часа,
-без автоматического продления; хранится максимум пять сессий на пользователя.
+`user`: `{id,nickname,role,department,active}`. Роли: `admin`, `moderator`, `member`.
+`active` в ответе — 0/1; в запросе изменения — boolean. `expiresAt` и `created_at` —
+Unix milliseconds. Сессия действует 24 часа по умолчанию, максимум пять сессий
+на аккаунт. Пароль: 12–128 символов; ник: 3–24 латинских символа, цифры, `_`, первая буква.
 
-Ошибки имеют вид `{"error":"INVALID_CREDENTIALS"}`. Основные коды:
+Для вложения сначала загрузите файл с `scope=chat` и target, затем передайте его ID
+в WS-команде. Прикрепить можно только свой ещё не использованный файл к указанному
+при загрузке диалогу. Неприкреплённый файл скачивает только загрузивший пользователь;
+после прикрепления — участники диалога. Для отдела право проверяется по текущему
+членству; администратор видит историю отделов, но не чужие личные диалоги.
 
-| HTTP | Код | Значение |
-| --- | --- | --- |
-| 400 | `INVALID_INPUT` | Поля не соответствуют схеме |
-| 401 | `INVALID_CREDENTIALS` / `UNAUTHORIZED` | Неверные данные входа / нет сессии |
-| 403 | `INVALID_INVITATION` / `ORIGIN_DENIED` / `LAN_ONLY` | Отказ в регистрации или доступе |
-| 409 | `NICKNAME_TAKEN` / `ALREADY_CONNECTED` | Ник занят / уже есть активный WSS |
-| 413 | `INVALID_REQUEST` | HTTP-тело больше 4096 байт |
-| 429 | `INVALID_REQUEST` | Ограничение запросов; учитывать HTTP-статус и `Retry-After` |
-| 500 | `INTERNAL_ERROR` | Внутренняя ошибка без чувствительных подробностей |
-
-Лимиты: 120 HTTP-запросов в минуту на IP; регистрация и вход — по 10 в минуту
-на маршрут/IP. Учтите общий IP клиентов за NAT. Увеличение лимитов требует
-соответствующей оценки памяти и нагрузки scrypt.
+Аудит содержит `{id,time,actor,nickname,action,subject,ip}`. `time` — ISO UTC,
+subject — ID объекта или JSON с изменениями аккаунта без пароля. Журнал доступен
+только администратору. Первое назначение администратора — локальный CLI,
+см. [эксплуатацию](organization.md).
 
 ## WebSocket
 
-Адрес: `wss://<LAN-IP>:8443/ws`. До upgrade проверяются Origin и сессия в cookie.
-Никаких bearer-токенов в URL. Один аккаунт — одно активное соединение; второе
-отклоняется с HTTP 409, при одновременных upgrade может закрыться кодом 1008.
-
-После соединения сначала дождитесь `ready`. Один текстовый JSON-объект на кадр.
-Типы находятся в `src/protocol.ts`: `ClientCommand` и `ServerEvent`.
-
-### Команды клиента
+`wss://<LAN-IP>:8443/ws`. Cookie и Origin проверяются до upgrade. Один аккаунт —
+одно соединение; второй получает HTTP 409. Дождитесь `ready`, затем отправляйте
+текстовые JSON-кадры:
 
 ```json
 {"type":"join","channel":"#general"}
 {"type":"names","channel":"#general"}
 {"type":"message","target":"#general","text":"Привет!"}
-{"type":"message","target":"bob","text":"Личное сообщение"}
+{"type":"message","target":"bob","text":"Документ","attachmentId":"550e8400-e29b-41d4-a716-446655440000"}
 {"type":"part","channel":"#general"}
 {"type":"ping"}
 ```
 
-Вход создаёт комнату, если её ещё нет. `names` доступен после входа.
-Произвольные IRC-команды не поддерживаются. Ник менять нельзя.
-Текст ограничен 350 **байтами**, не символами; кириллица обычно занимает
-2 байта на символ, emoji — больше. Управляющие символы и переводы строк запрещены.
-Состояние комнаты определяет InspIRCd; например, отправка в комнату без входа
-отклоняется IRC-сервером.
+Доступны #general, #announcements и зарегистрированные отделы из directory.
+Произвольные каналы создавать через join нельзя. Обычный сотрудник читает
+#announcements, но писать может только модератор или администратор.
+Проверки ролей выполняются на сервере для каждой команды, а не только в UI.
+IRC-префикс оператора (`@`) не является ролью приложения.
 
-### События сервера
+Текст: до 350 байт UTF-8, одна строка без управляющих символов. Вложения передаются
+через HTTP; текст и метаданные сообщения — через WS. Для отправки в канал нужно
+вступить в него; личный адресат должен быть активным аккаунтом онлайн.
+
+События: ready, join, part, quit, names, topic, message, pong, error. Пример сохранённого
+сообщения с файлом:
 
 ```json
-{"type":"ready","nickname":"alice"}
-{"type":"join","nickname":"bob","channel":"#general"}
-{"type":"names","channel":"#general","members":[{"nickname":"alice","prefix":"@"},{"nickname":"bob","prefix":""}]}
-{"type":"message","from":"alice","target":"#general","text":"Привет!","time":"2026-11-09T12:00:00.000Z"}
-{"type":"message","from":"bob","target":"alice","text":"Личное сообщение","time":"2026-11-09T12:00:01.000Z"}
-{"type":"topic","channel":"#general","text":""}
-{"type":"part","nickname":"bob","channel":"#general"}
-{"type":"quit","nickname":"bob"}
-{"type":"pong"}
-{"type":"error","code":"IRC_401","message":"Recipient is offline or does not exist"}
+{"type":"message","id":42,"from":"alice","target":"bob","text":"Документ","time":"2026-11-13T12:00:00.000Z","attachment":{"id":"550e8400-e29b-41d4-a716-446655440000","name":"График.pdf","size":1024}}
 ```
 
-`prefix` — IRC-роль (`@` для оператора комнаты). Управление ролями и редактирование
-темы через API пока не реализованы. События присутствия поступают для общих комнат,
-глобального списка пользователей онлайн нет. `quit` удаляет участника из всех
-комнат в состоянии клиента.
+API сохраняет сообщение один раз по IRC-эху отправителя. Всем получателям отдаётся
+одинаковый ID, используемый и в истории. До получения эха отправка не подтверждена;
+подтверждения прочтения нет. После reconnect повторите join и загрузите history,
+объединяя события по ID. Один отправитель может ждать подтверждения одного сообщения.
 
-В этой версии нет ID сообщений, подтверждения прочтения и гарантии доставки.
-Серверное эхо приходит и отправителю. UI может брать его за подтверждение приёма
-IRC, но не за доказательство доставки адресату. После разрыва соединения сообщения
-не переигрываются. Клиент восстанавливает WSS и повторяет `join`.
+## Ошибки и лимиты
 
-Основные WS-ошибки: `NOT_READY`, `INVALID_JSON`, `INVALID_COMMAND`, `NOT_JOINED`,
-`IRC_401` (адресат офлайн), `IRC_404` (нельзя отправить в канал), `IRC_433` (ник занят),
-`IRC_UNAVAILABLE`, `IRC_DISCONNECTED`, `IRC_TIMEOUT`.
-UI должен обрабатывать и другие коды семейства `IRC_<число>`.
+Ошибки HTTP: `{error:"CODE"}`; WS: `{type:"error",code:"CODE",message:"…"}`.
 
-Лимит входящего кадра — 4096 байт; только текстовые кадры. Скорость — 5 команд/с,
-краткий всплеск до 20. Превышение закрывает соединение с 1008, бинарный кадр — с 1003,
-слишком большой — с 1009. На потерю IRC сервер закрывает WSS с 1011.
-При выходе, истечении сессии, отсутствии pong или переполнении очереди соединение
-прерывается; клиент может увидеть 1006 и должен перепроверить `/api/auth/me`.
-Сервер посылает WebSocket ping каждые 30 секунд; браузер отвечает автоматически.
+| HTTP | Коды / смысл |
+| --- | --- |
+| 400 | INVALID_INPUT / INVALID_REQUEST |
+| 401 | UNAUTHORIZED / INVALID_CREDENTIALS |
+| 403 | FORBIDDEN, REGISTRATION_CLOSED, ORIGIN_DENIED, LAN_ONLY |
+| 404 | NOT_FOUND, в том числе при недоступном чужом файле |
+| 409 | NICKNAME_TAKEN, ALREADY_EXISTS, ALREADY_CONNECTED, LAST_ADMIN |
+| 413 | Превышен размер тела |
+| 429 | Лимит запросов; учитывать Retry-After |
+| 500 | INTERNAL_ERROR без текста исключения/секретов |
+| 507 | STORAGE_FULL — квота файлов исчерпана |
+
+Дополнительные WS-коды: NOT_READY, NOT_JOINED, INVALID_JSON, INVALID_COMMAND,
+MESSAGE_PENDING, MESSAGE_TIMEOUT, STORAGE_ERROR, FORBIDDEN, IRC_401 (адресат офлайн)
+и прочие IRC_<число>, IRC_UNAVAILABLE/DISCONNECTED/TIMEOUT.
+
+JSON HTTP — 4096 байт; upload — 10 МиБ; общая квота содержимого файлов — 1 ГиБ.
+HTTP — 120 запросов в минуту на IP, вход и загрузка файлов — по 10 на маршрут/IP.
+WS — 4096 байт на кадр, 5 команд/с, всплеск до 20; ping каждые 30 секунд.
+Переполнение очереди, истечение сессии, выход или административное изменение
+аккаунта закрывают WSS; перепроверьте `/api/auth/me`. Лимит каналов InspIRCd — 20
+на соединение. UI восстанавливает первые 20 доступных чатов; для остальных
+сначала покиньте один из подключённых.

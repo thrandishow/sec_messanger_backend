@@ -7,13 +7,13 @@ import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import { WebSocket } from 'ws';
 import { isLocalAddress, type Config } from './config.js';
-import { Store, equalSecret } from './store.js';
+import { Store } from './store.js';
 import { IrcBridge, probeIrc } from './irc.js';
+import { organizationRoutes, FILE_LIMIT } from './organization.js';
 import { clientCommandSchema, nicknameSchema, type ServerEvent } from './protocol.js';
 
 export const COOKIE_NAME = 'shifr_session';
 const credentialsSchema = z.object({ nickname: nicknameSchema, password: z.string().min(12).max(128) }).strict();
-const registerSchema = credentialsSchema.extend({ invitation: z.string().max(128) });
 
 export async function buildApp(config: Config, options: { logger?: boolean } = {}) {
   const app = Fastify({
@@ -26,7 +26,7 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
     ...(config.tlsCert && config.tlsKey ? { https: { cert: readFileSync(config.tlsCert), key: readFileSync(config.tlsKey) } } : {}),
   });
   const store = new Store(config.databasePath);
-  const active = new Map<string, { socket: WebSocket; tokenHash: string; close: () => void }>();
+  const active = new Map<string, { socket: WebSocket; tokenHash: string; close: () => void; emit: (event: ServerEvent) => void; joined: Set<string> }>();
 
   app.addHook('onRequest', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
@@ -63,24 +63,17 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
     const irc = await probeIrc(config);
     return reply.code(irc ? 200 : 503).send({ status: irc ? 'ok' : 'unavailable', irc });
   });
-  app.get('/api/config', async () => ({ name: 'Шифр-связь', protocolVersion: 1,
-    registration: 'invitation', messageMaxBytes: 350, history: false, endToEndEncryption: false }));
+  organizationRoutes(app, store, id => active.get(id)?.close());
+  app.get('/api/config', async () => ({ name: 'Шифр-связь', protocolVersion: 2,
+    registration: 'admin', messageMaxBytes: 350, history: true, fileMaxBytes: FILE_LIMIT, endToEndEncryption: false }));
+  app.post('/api/auth/register', async (_request, reply) => reply.code(403).send({ error: 'REGISTRATION_CLOSED' }));
 
-  app.post('/api/auth/register', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
-    const body = registerSchema.safeParse(request.body);
-    if (!body.success) return reply.code(400).send({ error: 'INVALID_INPUT' });
-    if (!equalSecret(body.data.invitation, config.registrationToken)) return reply.code(403).send({ error: 'INVALID_INVITATION' });
-    const user = await store.register(body.data.nickname, body.data.password);
-    if (!user) return reply.code(409).send({ error: 'NICKNAME_TAKEN' });
-    const session = store.createSession(user, config.sessionTtlSeconds);
-    reply.setCookie(COOKIE_NAME, session.token, { ...cookieOptions, maxAge: config.sessionTtlSeconds });
-    return reply.code(201).send({ user, expiresAt: session.expiresAt });
-  });
   app.post('/api/auth/login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
     const body = credentialsSchema.safeParse(request.body);
     if (!body.success) return reply.code(400).send({ error: 'INVALID_INPUT' });
     const user = await store.login(body.data.nickname, body.data.password);
-    if (!user) return reply.code(401).send({ error: 'INVALID_CREDENTIALS' });
+    if (!user) { store.audit(null, 'auth.login_failed', body.data.nickname.toLowerCase(), request.ip); return reply.code(401).send({ error: 'INVALID_CREDENTIALS' }); }
+    store.audit(user.id, 'auth.login', user.id, request.ip);
     const session = store.createSession(user, config.sessionTtlSeconds);
     reply.setCookie(COOKIE_NAME, session.token, { ...cookieOptions, maxAge: config.sessionTtlSeconds });
     return { user, expiresAt: session.expiresAt };
@@ -99,6 +92,7 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
     const session = sessionFrom(token);
     if (token) store.revoke(token);
     if (session) {
+      store.audit(session.user.id, 'auth.logout', session.user.id, request.ip);
       const connection = active.get(session.user.id);
       if (connection?.tokenHash === session.tokenHash) connection.close();
     }
@@ -118,10 +112,39 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
     if (!session) return socket.close(1008, 'Session expired');
     // Check again after upgrade to cover simultaneous handshakes.
     if (active.has(session.user.id)) return socket.close(1008, 'Already connected');
-    const emit = (event: ServerEvent) => {
+    const deliver = (event: ServerEvent) => {
       if (socket.readyState !== WebSocket.OPEN) return;
       if (socket.bufferedAmount > 64 * 1024) { socket.terminate(); return; }
       socket.send(JSON.stringify(event));
+    };
+    const joined = new Set<string>();
+    let pending: { target: string; text: string; attachmentId?: string } | null = null;
+    let pendingTimer: NodeJS.Timeout | undefined;
+    const emit = (event: ServerEvent) => {
+      if (event.type === 'join' && event.nickname === session.user.nickname) joined.add(event.channel);
+      if (event.type === 'part' && event.nickname === session.user.nickname) joined.delete(event.channel);
+      if (event.type === 'error') { pending = null; clearTimeout(pendingTimer); }
+      if (event.type !== 'message') { deliver(event); return; }
+      // A single persistence point: only the sender's IRC echo confirms delivery.
+      // Other IRC connections receive the same message; ignoring those avoids duplicate rows.
+      if (event.from !== session.user.nickname || !pending || event.target !== pending.target || event.text !== pending.text) return;
+      const outgoing = pending;
+      pending = null; clearTimeout(pendingTimer);
+      const currentSession = sessionFrom(request.cookies[COOKIE_NAME]);
+      if (!currentSession || !store.canWrite(currentSession.user, event.target)) return;
+      try {
+        const saved = store.recordMessage(currentSession.user, event.target, event.text, event.time, outgoing.attachmentId);
+        for (const [id, connection] of active) {
+          const viewer = store.user(id);
+          if (!viewer?.active) continue;
+          const allowed = event.target.startsWith('#')
+            ? connection.joined.has(event.target) && store.canRead(viewer, event.target)
+            : id === currentSession.user.id || viewer.nickname === event.target;
+          if (allowed) connection.emit({ type: 'message', ...saved });
+        }
+      } catch {
+        deliver({ type: 'error', code: 'STORAGE_ERROR', message: 'Message was not saved. Try again.' });
+      }
     };
     const bridge = new IrcBridge(config, session.user.nickname, emit, () => socket.close(1011, 'IRC unavailable'));
     let cleaned = false;
@@ -133,6 +156,7 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
       cleaned = true;
       clearInterval(heartbeat);
       clearTimeout(expiry);
+      clearTimeout(pendingTimer);
       bridge.close();
       active.delete(session.user.id);
     };
@@ -143,7 +167,7 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
       alive = false;
       socket.ping();
     }, 30_000);
-    active.set(session.user.id, { socket, tokenHash: session.tokenHash, close });
+    active.set(session.user.id, { socket, tokenHash: session.tokenHash, close, emit: deliver, joined });
     socket.on('pong', () => { alive = true; });
     socket.on('error', close);
     socket.on('close', cleanup);
@@ -165,7 +189,29 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
         emit({ type: 'error', code: 'INVALID_COMMAND', message: 'Invalid command or message exceeds 350 UTF-8 bytes' });
         return;
       }
-      bridge.command(parsed.data);
+      const command = parsed.data;
+      const currentUser = sessionFrom(request.cookies[COOKIE_NAME])?.user;
+      if (!currentUser) return close();
+      if (command.type !== 'ping') {
+        const target = command.type === 'message' ? command.target.toLowerCase() : command.channel;
+        if (command.type === 'message') command.target = target;
+        if (!(command.type === 'message' ? store.canWrite(currentUser, target) : store.canRead(currentUser, target))) {
+          deliver({ type: 'error', code: 'FORBIDDEN', message: 'Access denied' }); return;
+        }
+        if (command.type === 'message') {
+          if (pending) { deliver({ type: 'error', code: 'MESSAGE_PENDING', message: 'Wait for confirmation' }); return; }
+          if (target.startsWith('#') && !joined.has(target)) { deliver({ type: 'error', code: 'NOT_JOINED', message: 'Join first' }); return; }
+          if (command.attachmentId && !store.attachmentAllowed(currentUser, command.attachmentId, target)) {
+            deliver({ type: 'error', code: 'FORBIDDEN', message: 'Attachment unavailable' }); return;
+          }
+          pending = command;
+          pendingTimer = setTimeout(() => {
+            pending = null;
+            deliver({ type: 'error', code: 'MESSAGE_TIMEOUT', message: 'No server confirmation' });
+          }, 10_000);
+        }
+      }
+      bridge.command(command);
     });
   });
 

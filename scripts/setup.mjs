@@ -48,7 +48,6 @@ runOpenSSL(['x509', '-req', '-in', 'runtime/tls/server.csr', '-CA', 'runtime/tls
 unlinkSync('runtime/tls/server.csr');
 unlinkSync('runtime/tls/server.ext');
 const ircPassword = randomBytes(32).toString('hex');
-const registrationToken = randomBytes(32).toString('hex');
 writeFileSync('runtime/irc-connect.conf', `<connect name="gateway" allow="*" password="${ircPassword}"
   hash="plaintext" resolvehostnames="no" localmax="1000" globalmax="1000"
   maxchans="20" limit="1000" timeout="10s" pingfreq="60s" commandrate="10000" threshold="40">
@@ -65,7 +64,6 @@ TLS_KEY_PATH=./runtime/tls/server.key
 IRC_HOST=127.0.0.1
 IRC_PORT=6667
 IRC_PASSWORD=${ircPassword}
-REGISTRATION_TOKEN=${registrationToken}
 SESSION_TTL_SECONDS=86400
 TRUST_PROXY=0
 `, { mode: 0o600, flag: 'wx' });

@@ -9,6 +9,7 @@ import { parseEnv } from 'node:util';
 import { createServer, createConnection } from 'node:net';
 import { request } from 'node:https';
 import { WebSocket } from 'ws';
+import { Store } from '../../src/store.js';
 import { buildApp } from '../../src/app.js';
 import { loadConfig } from '../../src/config.js';
 import type { ServerEvent } from '../../src/protocol.js';
@@ -87,6 +88,12 @@ test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and
     }
   });
   await portReady(ircPort);
+  const seed = new Store(config.databasePath);
+  await seed.register('alice', 'test-password-123', 'admin');
+  await seed.register('bob', 'test-password-123', 'member', '#finance');
+  seed.addDepartment('#finance', 'Финансы');
+  seed.addDepartment('#private', 'Другой отдел');
+  seed.close();
   const app = await buildApp(config);
   t.after(() => app.close());
   await app.listen({ host: '127.0.0.1', port: 0 });
@@ -144,8 +151,8 @@ test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and
   }
   await assert.rejects(http('/health/live', undefined, undefined, false), /certificate|self.signed/i);
   const register = async (nickname: string) => {
-    const result = await http('/api/auth/register', { nickname, password: 'test-password-123', invitation: config.registrationToken });
-    assert.equal(result.status, 201);
+    const result = await http('/api/auth/login', { nickname, password: 'test-password-123' });
+    assert.equal(result.status, 200);
     assert.match(result.setCookie, /Secure/);
     return result.cookie;
   };
@@ -187,13 +194,43 @@ test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and
   assert.equal(received.type === 'message' && received.text, 'Привет из LAN 🔐');
   assert.equal(received.type === 'message' && received.from, 'alice');
   assert.ok(received.type === 'message' && !Number.isNaN(Date.parse(received.time)));
-  await aliceEvents.wait(e => e.type === 'message' && e.text === 'Привет из LAN 🔐'); // server echo
+  const echo = await aliceEvents.wait(e => e.type === 'message' && e.text === 'Привет из LAN 🔐');
+  assert.equal(echo.type === 'message' && echo.id, received.type === 'message' && received.id);
+  const history = JSON.parse((await http('/api/history?target=%23general', undefined, bobCookie)).body).messages;
+  assert.equal(history.length, 1, 'One SQLite row despite two IRC recipients');
+  assert.equal(history[0].id, echo.type === 'message' && echo.id);
+  bobEvents.send({ type: 'join', channel: '#private' });
+  await bobEvents.wait(e => e.type === 'error' && e.code === 'FORBIDDEN');
+  bobEvents.send({ type: 'join', channel: '#announcements' });
+  await bobEvents.wait(e => e.type === 'join' && e.channel === '#announcements' && e.nickname === 'bob');
+  bobEvents.send({ type: 'message', target: '#announcements', text: 'Forbidden announcement' });
+  await bobEvents.wait(e => e.type === 'error' && e.code === 'FORBIDDEN');
+  aliceEvents.send({ type: 'join', channel: '#announcements' });
+  await aliceEvents.wait(e => e.type === 'join' && e.channel === '#announcements' && e.nickname === 'alice');
+  aliceEvents.send({ type: 'message', target: '#announcements', text: 'Official announcement' });
+  await bobEvents.wait(e => e.type === 'message' && e.text === 'Official announcement');
+  await aliceEvents.wait(e => e.type === 'message' && e.text === 'Official announcement');
+  const uploaded = await new Promise<string>((resolve, reject) => {
+    const req = request({ hostname: '127.0.0.1', port, path: '/api/files?scope=chat&target=bob&name=contract.txt', method: 'POST', ca,
+      headers: { cookie: aliceCookie, origin, 'content-type': 'application/octet-stream' } }, res => {
+      let body = ''; res.on('data', chunk => { body += chunk; });
+      res.on('end', () => { try { assert.equal(res.statusCode, 201); resolve(JSON.parse(body).file.id); } catch (e) { reject(e); } });
+    }); req.on('error', reject); req.end('Local document content');
+  });
+  bobEvents.send({ type: 'message', target: 'alice', text: 'Stolen attachment', attachmentId: uploaded });
+  await bobEvents.wait(e => e.type === 'error' && e.code === 'FORBIDDEN');
+  aliceEvents.send({ type: 'message', target: 'bob', text: 'Document attached', attachmentId: uploaded });
+  const document = await bobEvents.wait(e => e.type === 'message' && e.text === 'Document attached');
+  assert.equal(document.type === 'message' && document.attachment?.id, uploaded);
+  await aliceEvents.wait(e => e.type === 'message' && e.text === 'Document attached');
+  assert.equal((await http(`/api/files/${uploaded}`, undefined, bobCookie)).body, 'Local document content');
+
   bobEvents.send({ type: 'message', target: 'alice', text: 'Личное сообщение' });
   await aliceEvents.wait(e => e.type === 'message' && e.target === 'alice' && e.text === 'Личное сообщение');
   aliceEvents.send({ type: 'message', target: '#general', text: 'test\r\nJOIN #injected' });
   await aliceEvents.wait(e => e.type === 'error' && e.code === 'INVALID_COMMAND');
   aliceEvents.send({ type: 'message', target: 'nobody', text: 'Offline?' });
-  await aliceEvents.wait(e => e.type === 'error' && e.code === 'IRC_401');
+  await aliceEvents.wait(e => e.type === 'error' && e.code === 'FORBIDDEN');
   bobEvents.send({ type: 'part', channel: '#general' });
   await aliceEvents.wait(e => e.type === 'part' && e.nickname === 'bob');
   const aliceClosed = once(alice, 'close');
@@ -202,11 +239,13 @@ test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and
   await rejectedWs(aliceCookie, origin, 401);
 
   await t.test('session expiry disconnects a live WebSocket', async sub => {
-    const shortApp = await buildApp({ ...config, databasePath: ':memory:', sessionTtlSeconds: 3 });
+    const shortPath = join(dir, 'expiry.sqlite');
+    const shortSeed = new Store(shortPath); await shortSeed.register('expires', 'test-password-123'); shortSeed.close();
+    const shortApp = await buildApp({ ...config, databasePath: shortPath, sessionTtlSeconds: 3 });
     sub.after(() => shortApp.close());
-    const result = await shortApp.inject({ method: 'POST', url: '/api/auth/register', headers: { origin },
-      payload: { nickname: 'expires', password: 'test-password-123', invitation: config.registrationToken } });
-    assert.equal(result.statusCode, 201);
+    const result = await shortApp.inject({ method: 'POST', url: '/api/auth/login', headers: { origin },
+      payload: { nickname: 'expires', password: 'test-password-123' } });
+    assert.equal(result.statusCode, 200);
     await shortApp.listen({ host: '127.0.0.1', port: 0 });
     const shortPort = (shortApp.server.address() as { port: number }).port;
     const ws = new WebSocket(`wss://127.0.0.1:${shortPort}/ws`, { ca, origin,

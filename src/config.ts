@@ -21,7 +21,7 @@ const envSchema = z.object({
   IRC_HOST: z.string().default('127.0.0.1'),
   IRC_PORT: z.coerce.number().int().min(1).max(65535).default(6667),
   IRC_PASSWORD: z.string().regex(/^[a-f0-9]{64}$/),
-  REGISTRATION_TOKEN: z.string().regex(/^[a-f0-9]{64}$/),
+  REGISTRATION_TOKEN: z.string().regex(/^[a-f0-9]{64}$/).optional(), // Legacy configuration, no longer used for access.
   SESSION_TTL_SECONDS: z.coerce.number().int().min(60).max(604800).default(86400),
   TRUST_PROXY: z.enum(['0', '1']).default('0'),
 });

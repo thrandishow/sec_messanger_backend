@@ -7,7 +7,7 @@ export const clientCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('join'), channel: channelSchema }).strict(),
   z.object({ type: z.literal('part'), channel: channelSchema }).strict(),
   z.object({ type: z.literal('message'), target: z.union([channelSchema, nicknameSchema]),
-    text: textSchema.refine(s => Buffer.byteLength(s, 'utf8') <= 350, 'Maximum 350 UTF-8 bytes') }).strict(),
+    text: textSchema.refine(s => Buffer.byteLength(s, 'utf8') <= 350, 'Maximum 350 UTF-8 bytes'), attachmentId: z.string().uuid().optional() }).strict(),
   z.object({ type: z.literal('names'), channel: channelSchema }).strict(),
   z.object({ type: z.literal('ping') }).strict(),
 ]);
@@ -15,7 +15,7 @@ export type ClientCommand = z.infer<typeof clientCommandSchema>;
 
 export type ServerEvent =
   | { type: 'ready'; nickname: string }
-  | { type: 'message'; from: string; target: string; text: string; time: string }
+  | { type: 'message'; from: string; target: string; text: string; time: string; id?: number; attachment?: { id: string; name: string; size: number } }
   | { type: 'join' | 'part'; nickname: string; channel: string }
   | { type: 'quit'; nickname: string }
   | { type: 'names'; channel: string; members: { nickname: string; prefix: string }[] }

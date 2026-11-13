@@ -15,7 +15,7 @@ test('LAN setup creates a trusted certificate chain and refuses to overwrite sec
   const generated = run('192.168.1.10');
   assert.equal(generated.status, 0, generated.stderr);
   const env = readFileSync(join(dir, '.env'), 'utf8');
-  const token = env.match(/^REGISTRATION_TOKEN=(.*)$/m)![1]!;
+  const token = env.match(/^IRC_PASSWORD=(.*)$/m)![1]!;
   assert.equal(token.length, 64);
   assert.equal(generated.stdout.includes(token), false);
   assert.equal(statSync(join(dir, '.env')).mode & 0o777, 0o600);

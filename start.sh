@@ -15,8 +15,14 @@ if [ ! -f .env ]; then
     printf '%s\n' 'Первый запуск: ./start.sh <LAN-IP>, например ./start.sh 192.168.1.10' >&2
     exit 1
   fi
+  setup_uid=${SUDO_UID:-$(id -u)}
+  setup_gid=${SUDO_GID:-$(id -g)}
+  if [ "$setup_uid" = 0 ]; then
+    printf '%s\n' 'Первую настройку запускайте от обычного владельца проекта (можно через sudo).' >&2
+    exit 1
+  fi
   docker compose -f compose.setup.yaml build
-  docker compose -f compose.setup.yaml run --rm --user "$(id -u):$(id -g)" setup --ip "$1"
+  docker compose -f compose.setup.yaml run --rm --user "$setup_uid:$setup_gid" setup --ip "$1"
 fi
 lan_ip=$(awk -F= '$1 == "LAN_IP" { print $2; exit }' .env)
 if [ -z "$lan_ip" ]; then
@@ -30,3 +36,4 @@ fi
 docker compose up --build -d --wait --wait-timeout 180
 printf '\nШифр-связь готова: https://%s:8443\n' "$lan_ip"
 printf '%s\n' 'Установите runtime/tls/ca.crt как доверенный CA на клиентских устройствах.'
+printf '%s\n' 'Создание первого администратора: см. docs/organization.md (публичная регистрация закрыта).'
