@@ -300,13 +300,13 @@ openssl x509 -in runtime/tls/ca.crt -checkend 2592000 -noout
 | Сертификат просрочен / ещё не действует | Проверить системное время сервера и клиента, затем `-dates` для CA и server |
 | Статика открывается, `/api` возвращает 502 | Проверить журнал web/API, CA и `DNS:localhost` в серверном сертификате |
 | TLS работает, API возвращает 403 | Проверить LAN-доступ и `ALLOWED_ORIGINS`; origin включает `https://`, адрес и порт `8443` |
-| `Permission denied` на TLS или SQLite | Проверить владельцев и числовые UID/GID, а не открывать права всем |
+| `Permission denied` при чтении ключа TLS | Проверить владельцев и числовые UID/GID, а не открывать права всем |
 
 Для диагностики из `project_back`:
 
 ```bash
 sudo docker compose ps
-sudo docker compose logs --tail=80 broker api web
+sudo docker compose logs --tail=80 postgres broker api web
 ls -ldn runtime runtime/tls runtime/ca data
 ls -ln runtime/tls/server.crt runtime/tls/server.key
 awk -F= '$1 == "LOCAL_UID" || $1 == "LOCAL_GID" || $1 == "LAN_IP" { print }' .env

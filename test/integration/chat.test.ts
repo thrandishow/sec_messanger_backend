@@ -6,21 +6,12 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { parseEnv } from 'node:util';
-import { createServer, createConnection } from 'node:net';
+import { createConnection } from 'node:net';
 import { request } from 'node:https';
 import { WebSocket } from 'ws';
-import { Store } from '../../src/store.js';
-import { buildApp } from '../../src/app.js';
-import { loadConfig } from '../../src/config.js';
-import type { ServerEvent } from '../../src/protocol.js';
-
-async function freePort() {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-  const port = (server.address() as { port: number }).port;
-  await new Promise<void>(resolve => server.close(() => resolve()));
-  return port;
-}
+import { DatabaseSync } from 'node:sqlite';
+import { apiBinary, brokerBinary, freePort, legacyDatabase, startApi, testDatabase, sql } from '../helpers.ts';
+type ServerEvent = { type: string; code?: string; nickname?: string; channel?: string; text?: string; from?: string; target?: string; time: string; id?: number; attachment?: {id: string}; members: {nickname:string}[] };
 
 async function portReady(port: number) {
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -60,7 +51,7 @@ function inbox(ws: WebSocket) {
 }
 
 test('Rust broker: HTTPS auth, WSS rooms, direct messages, logout, expiry, and outage', { timeout: 30_000 }, async t => {
-  assert.ok(process.env.BROKER_BINARY, 'Set BROKER_BINARY to a built shifr-broker executable');
+
   const dir = mkdtempSync(join(tmpdir(), 'shifr-integration-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const brokerPort = await freePort();
@@ -70,29 +61,30 @@ test('Rust broker: HTTPS auth, WSS rooms, direct messages, logout, expiry, and o
   assert.equal(spawnSync(process.execPath, [resolve('scripts/setup.mjs'), '--ip', '192.168.1.10'],
     { cwd: dir, stdio: 'ignore' }).status, 0);
   const ca = readFileSync(join(dir, 'runtime/tls/ca.crt'));
-  const config = loadConfig({ ...parseEnv(readFileSync(join(dir, '.env'), 'utf8')),
-    HOST: '127.0.0.1', BROKER_PORT: String(brokerPort), ALLOWED_ORIGINS: `https://127.0.0.1:${proxyPort}`,
-    TRUST_PROXY: proxied ? '1' : '0',
-    TLS_CERT_PATH: join(dir, 'runtime/tls/server.crt'), TLS_KEY_PATH: join(dir, 'runtime/tls/server.key'),
-    DATABASE_PATH: join(dir, 'db.sqlite') });
-  const broker = spawn(process.env.BROKER_BINARY!, [], {
-    env: { ...process.env, BROKER_TOKEN: config.brokerToken, BROKER_BIND: `127.0.0.1:${brokerPort}` }, stdio: 'ignore' });
+  const origin = `https://127.0.0.1:${proxyPort}`;
+  const env: NodeJS.ProcessEnv & { DATABASE_PATH: string } = { ...parseEnv(readFileSync(join(dir, '.env'),'utf8')), HOST:'127.0.0.1', BROKER_PORT:String(brokerPort),
+    ALLOWED_ORIGINS: origin, TRUST_PROXY:proxied?'1':'0', TLS_CERT_PATH:join(dir,'runtime/tls/server.crt'), TLS_KEY_PATH:join(dir,'runtime/tls/server.key'),
+    DATABASE_PATH:join(dir,'db.sqlite') };
+  const broker = spawn(brokerBinary, [], {
+    env: { ...process.env, BROKER_TOKEN: env['BROKER_TOKEN'], BROKER_BIND: `127.0.0.1:${brokerPort}` }, stdio: 'ignore' });
   t.after(async () => {
     if (broker.exitCode === null && broker.signalCode === null) {
       const exited = once(broker, 'exit'); broker.kill('SIGTERM'); await exited;
     }
   });
   await portReady(brokerPort);
-  const seed = new Store(config.databasePath);
-  await seed.register('alice', 'test-password-123', 'admin');
-  await seed.register('bob', 'test-password-123', 'member', '#finance');
-  seed.addDepartment('#finance', 'Финансы');
-  seed.addDepartment('#private', 'Другой отдел');
-  seed.close();
-  const app = await buildApp(config);
-  t.after(() => app.close());
-  await app.listen({ host: '127.0.0.1', port: 0 });
-  const apiPort = (app.server.address() as { port: number }).port;
+  const seed = legacyDatabase(env.DATABASE_PATH);
+  const aliceId = seed.account('alice','test-password-123');
+  seed.account('bob','test-password-123');
+  const oldCookie = seed.session(aliceId, 60_000);
+  seed.db.close();
+  const database=testDatabase(env.DATABASE_PATH);
+  const promoted=spawnSync(apiBinary,['admin','--promote','alice'],{env:{...process.env,...env,...database}});
+  assert.equal(promoted.status,0,promoted.stderr.toString());
+  sql(database.PGDATABASE,"INSERT INTO departments VALUES('#finance','Финансы'),('#private','Другой отдел'); UPDATE users SET department='#finance' WHERE nickname='bob'");
+  const app=await startApi(env);
+  t.after(()=>app.close());
+  const apiPort=app.port;
   const port = proxied ? proxyPort : apiPort;
   if (proxied) {
     const frontDir = resolve(process.env.SHIFR_FRONT_DIR ?? '../project_front');
@@ -117,7 +109,7 @@ test('Rust broker: HTTPS auth, WSS rooms, direct messages, logout, expiry, and o
     });
     await portReady(port);
   }
-  const origin = config.origins[0]!;
+
   const http = (path: string, payload?: unknown, cookie?: string, trusted = true) => new Promise<{
     status: number; body: string; cookie: string; setCookie: string;
   }>((resolve, reject) => {
@@ -132,6 +124,7 @@ test('Rust broker: HTTPS auth, WSS rooms, direct messages, logout, expiry, and o
     req.end(payload === undefined ? undefined : JSON.stringify(payload));
   });
   assert.equal((await http('/health/ready')).status, 200);
+  assert.equal((await http('/api/auth/me',undefined,oldCookie)).status,401, 'promotion revokes old sessions');
   if (proxied) {
     const page = await http('/');
     assert.equal(page.status, 200);
@@ -227,6 +220,8 @@ test('Rust broker: HTTPS auth, WSS rooms, direct messages, logout, expiry, and o
   await aliceEvents.wait(e => e.type === 'message' && e.target === 'alice' && e.text === 'Личное сообщение');
   aliceEvents.send({ type: 'message', target: '#general', text: 'test\r\nJOIN #injected' });
   await aliceEvents.wait(e => e.type === 'error' && e.code === 'INVALID_COMMAND');
+  aliceEvents.send({type:'message',target:'#general',text:'я'.repeat(176)});
+  await aliceEvents.wait(e=>e.type==='error' && e.code==='INVALID_COMMAND');
   aliceEvents.send({ type: 'message', target: 'nobody', text: 'Offline?' });
   await aliceEvents.wait(e => e.type === 'error' && e.code === 'FORBIDDEN');
   bobEvents.send({ type: 'part', channel: '#general' });
@@ -241,17 +236,12 @@ test('Rust broker: HTTPS auth, WSS rooms, direct messages, logout, expiry, and o
   assert.deepEqual(JSON.parse((await http('/api/history?target=alice', undefined, bobCookie)).body).messages, beforeOffline);
 
   await t.test('session expiry disconnects a live WebSocket', async sub => {
-    const shortPath = join(dir, 'expiry.sqlite');
-    const shortSeed = new Store(shortPath); await shortSeed.register('expires', 'test-password-123'); shortSeed.close();
-    const shortApp = await buildApp({ ...config, databasePath: shortPath, sessionTtlSeconds: 3 });
-    sub.after(() => shortApp.close());
-    const result = await shortApp.inject({ method: 'POST', url: '/api/auth/login', headers: { origin },
-      payload: { nickname: 'expires', password: 'test-password-123' } });
-    assert.equal(result.statusCode, 200);
-    await shortApp.listen({ host: '127.0.0.1', port: 0 });
-    const shortPort = (shortApp.server.address() as { port: number }).port;
-    const ws = new WebSocket(`wss://127.0.0.1:${shortPort}/ws`, { ca, origin,
-      headers: { cookie: String(result.headers['set-cookie']).split(';')[0]! } });
+    const shortPath=join(dir,'expiry.sqlite');
+    const legacy=legacyDatabase(shortPath); const id=legacy.account('expires','test-password-123');
+    const oldSession=legacy.session(id,3000); legacy.db.close();
+    const shortApp=await startApi({...env,DATABASE_PATH:shortPath});
+    sub.after(()=>shortApp.close());
+    const ws = new WebSocket(`wss://127.0.0.1:${shortApp.port}/ws`,{ca,origin,headers:{cookie:oldSession}});
     const events = inbox(ws);
     sub.after(() => ws.terminate());
     await events.wait(e => e.type === 'ready');

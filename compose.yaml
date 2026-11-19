@@ -1,5 +1,24 @@
 name: shifr-svyaz
 services:
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: shifr
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+      SHIFR_DB_PASSWORD: "${POSTGRES_PASSWORD:?Run ./start.sh to configure PostgreSQL}"
+    # The postgres administrator uses the local container socket for maintenance.
+    entrypoint: ["/bin/sh", "-ec", 'export POSTGRES_PASSWORD=$$(od -An -N32 -tx1 /dev/urandom | tr -d " \n"); exec docker-entrypoint.sh postgres']
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/10-shifr.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=$$SHIFR_DB_PASSWORD psql -h 127.0.0.1 -U shifr -d shifr -Atqc 'SELECT 1' >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [local]
+
   broker:
     image: shifr-svyaz-broker:0.1.0
     build:
@@ -32,14 +51,21 @@ services:
       PORT: 8443
       BROKER_HOST: broker
       BROKER_PORT: 7000
-      DATABASE_PATH: /app/data/shifr.sqlite
+      PGHOST: postgres
+      PGDATABASE: shifr
+      PGUSER: shifr
+      PGPORT: 5432
+      PGPASSWORD: "${POSTGRES_PASSWORD:?Run ./start.sh}"
+      LEGACY_SQLITE_PATH: /legacy/shifr.sqlite
       TLS_CERT_PATH: /app/runtime/tls/server.crt
       TLS_KEY_PATH: /app/runtime/tls/server.key
       TRUST_PROXY: '1'
     volumes:
       - ./runtime/tls:/app/runtime/tls:ro
-      - ./data:/app/data
+      - ./data:/legacy:ro
     depends_on:
+      postgres:
+        condition: service_healthy
       broker:
         condition: service_healthy
     networks: [local]
@@ -71,3 +97,6 @@ networks:
   # Only the explicit LAN_IP:8443 binding is published.
   lan:
     driver: bridge
+
+volumes:
+  pgdata:

@@ -10,6 +10,8 @@ test('one-command startup bootstraps once and preserves existing setup', t => {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   for (const name of ['bin', 'project_back', 'project_front']) mkdirSync(join(dir, name));
   const back = join(dir, 'project_back');
+  mkdirSync(join(back,'scripts'));
+  copyFileSync(resolve('scripts/ensure-db-password.sh'),join(back,'scripts/ensure-db-password.sh'));
   copyFileSync(resolve('start.sh'), join(back, 'start.sh'));
   writeFileSync(join(dir, 'project_front/package.json'), '{}');
   writeFileSync(join(dir, 'bin/docker'), `#!/bin/sh

@@ -117,7 +117,7 @@ async fn prepare_is_not_delivery_commit_fanout_ordering_and_membership() {
     a.send(json!({"type":"prepare","requestId":"one","target":"#team"}))
         .await;
     assert_eq!(a.next().await["type"], "accepted");
-    // A prepare must not disclose/deliver a message before SQLite has committed it.
+    // A prepare must not disclose/deliver a message before PostgreSQL has committed it.
     assert!(
         timeout(Duration::from_millis(50), read_frame(&mut b.read))
             .await

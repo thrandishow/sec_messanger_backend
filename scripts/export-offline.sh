@@ -8,15 +8,19 @@ if [ "$#" -ne 1 ]; then
   exit 1
 fi
 case "$1" in /*) ;; *) printf '%s\n' 'Use an absolute output directory.' >&2; exit 1 ;; esac
+sh scripts/ensure-db-password.sh
 # mkdir without -p refuses to overwrite a prior package.
 mkdir -m 700 "$1"
 package_dir=$1
+docker compose pull postgres
 docker compose build
 docker compose -f compose.setup.yaml build
-docker save -o "$package_dir/images.tar" shifr-svyaz-api:0.1.0 shifr-svyaz-web:0.1.0 shifr-svyaz-broker:0.1.0 shifr-svyaz-setup:0.1.0
+docker save -o "$package_dir/images.tar" postgres:17-bookworm shifr-svyaz-api:0.1.0 shifr-svyaz-web:0.1.0 shifr-svyaz-broker:0.1.0 shifr-svyaz-setup:0.1.0
 cp compose.yaml compose.setup.yaml "$package_dir/"
 cp scripts/start-offline.sh "$package_dir/start.sh"
-mkdir "$package_dir/docs"
+mkdir -p "$package_dir/docs" "$package_dir/docker/postgres" "$package_dir/scripts"
+cp docker/postgres/init.sql "$package_dir/docker/postgres/"
+cp scripts/ensure-db-password.sh "$package_dir/scripts/"
 cp docs/organization.md docs/certificates-sre.md docs/broker.md "$package_dir/docs/"
 (
   cd "$package_dir"

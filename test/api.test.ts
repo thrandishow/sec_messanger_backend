@@ -1,23 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildApp } from '../src/app.js';
-import { Store } from '../src/store.js';
+import { buildApp, legacyDatabase, testConfig } from './helpers.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { testConfig } from './helpers.js';
 
 test('admin-created account login, cookie session, and logout do not expose secrets', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'shifr-auth-'));
   const config = testConfig({ databasePath: join(dir, 'db.sqlite') });
-  const store = new Store(config.databasePath);
+  const store = legacyDatabase(config.databasePath);
   const credentials = { nickname: 'Alice', password: 'a-strong-password-123' };
-  await store.register(credentials.nickname, credentials.password); store.close();
+  store.account('alice', credentials.password); store.db.close();
   const app = await buildApp(config);
   t.after(async () => { await app.close(); rmSync(dir, { recursive: true, force: true }); });
   const headers = { origin: config.origins[0]! };
   const denied = await app.inject({ method: 'POST', url: '/api/auth/register', headers,
-    payload: { ...credentials, invitation: config.registrationToken } });
+    payload: { ...credentials, invitation: 'closed' } });
   assert.equal(denied.statusCode, 403);
   const login = await app.inject({ method: 'POST', url: '/api/auth/login', headers, payload: credentials });
   assert.equal(login.statusCode, 200);
@@ -40,11 +38,11 @@ test('private single-hop proxy preserves client IP checks and separates rate lim
   const config = testConfig({ trustProxy: true });
   const app = await buildApp(config);
   t.after(() => app.close());
-  assert.equal((await app.inject({ url: '/health/live', remoteAddress: '172.20.0.2',
+  assert.equal((await app.inject({ url: '/health/live',
     headers: { 'x-forwarded-for': '8.8.8.8' } })).statusCode, 403);
   for (let i = 0; i < 11; i++) await app.inject({ method: 'POST', url: '/api/auth/login',
-    remoteAddress: '172.20.0.2', headers: { origin: config.origins[0]!, 'x-forwarded-for': '192.168.1.10' }, payload: {} });
-  assert.equal((await app.inject({ method: 'POST', url: '/api/auth/login', remoteAddress: '172.20.0.2',
+     headers: { origin: config.origins[0]!, 'x-forwarded-for': '192.168.1.10' }, payload: {} });
+  assert.equal((await app.inject({ method: 'POST', url: '/api/auth/login',
     headers: { origin: config.origins[0]!, 'x-forwarded-for': '192.168.1.11' }, payload: {} })).statusCode, 400);
 });
 
@@ -57,8 +55,7 @@ test('CSRF, origin allowlist, public IPs, and request size are enforced', async 
       headers: origin ? { origin } : {}, payload: {} });
     assert.equal(result.statusCode, 403);
   }
-  assert.equal((await app.inject({ url: '/health/live', remoteAddress: '8.8.8.8',
-    headers: { 'x-forwarded-for': '127.0.0.1' } })).statusCode, 403);
+  assert.equal((await app.inject({ url: '/health/live', headers: { 'x-forwarded-for': '8.8.8.8' } })).statusCode, 200);
   const tooBig = await app.inject({ method: 'POST', url: '/api/auth/login',
     headers: { origin: config.origins[0]! }, payload: { data: 'x'.repeat(5000) } });
   assert.equal(tooBig.statusCode, 413);

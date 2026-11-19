@@ -9,12 +9,13 @@ if [ ! -f .env ]; then
   if [ "$setup_uid" = 0 ]; then printf '%s\n' 'Запускайте от владельца проекта, при необходимости через sudo.' >&2; exit 1; fi
   sha256sum -c images.tar.sha256
   docker load -i images.tar
-  docker image inspect shifr-svyaz-api:0.1.0 shifr-svyaz-web:0.1.0 shifr-svyaz-broker:0.1.0 shifr-svyaz-setup:0.1.0 >/dev/null
+  docker image inspect postgres:17-bookworm shifr-svyaz-api:0.1.0 shifr-svyaz-web:0.1.0 shifr-svyaz-broker:0.1.0 shifr-svyaz-setup:0.1.0 >/dev/null
   docker compose -f compose.setup.yaml run --rm --pull never --user "$setup_uid:$setup_gid" setup --ip "$1"
 fi
 lan_ip=$(awk -F= '$1 == "LAN_IP" { print $2; exit }' .env)
 if [ -z "$lan_ip" ]; then printf '%s\n' 'LAN_IP отсутствует в .env.' >&2; exit 1; fi
 if [ "$#" -gt 0 ] && [ "$1" != "$lan_ip" ]; then printf '%s\n' 'Для смены IP перевыпустите сертификат: docs/certificates-sre.md.' >&2; exit 1; fi
+sh scripts/ensure-db-password.sh
 docker compose up -d --no-build --pull never --remove-orphans --wait --wait-timeout 180
 printf 'Шифр-связь: https://%s:8443\n' "$lan_ip"
 printf '%s\n' 'Установите runtime/tls/ca.crt на клиентах. Создайте администратора по docs/organization.md.'

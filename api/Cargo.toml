@@ -1,0 +1,25 @@
+[package]
+name = "shifr-api"
+edition = "2024"
+rust-version = "1.91"
+version = "0.1.0"
+publish = false
+
+[dependencies]
+axum = {version="0.8", features=["ws"]}
+axum-server = {version="0.8", features=["tls-openssl"]}
+tokio = {version="1", features=["full"]}
+tokio-util = {version="0.7", features=["codec"]}
+futures-util = {version="0.3", features=["sink"]}
+openssl = "0.10"
+rusqlite = {version="0.38", features=["bundled"]}
+serde = {version="1",features=["derive"]}
+serde_json = "1"
+uuid = {version="1",features=["v4"]}
+hex = "0.4"
+libc = "0.2"
+percent-encoding = "2"
+shifr-broker = {path="../broker"}
+postgres = { version = "0.19", features = ["with-serde_json-1"] }
+r2d2_postgres = "0.18"
+r2d2 = "0.8"

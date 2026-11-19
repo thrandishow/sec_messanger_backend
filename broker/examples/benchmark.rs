@@ -154,7 +154,7 @@ async fn main() -> io::Result<()> {
         "payloadBytes":128,"messages":groups*messages,"verifiedDeliveries":latencies.len(),"seconds":elapsed,
         "messagesPerSecond":(groups*messages) as f64/elapsed,"deliveriesPerSecond":latencies.len() as f64/elapsed,
         "latencyMs":{"p50":percentile(50),"p95":percentile(95),"p99":percentile(99)},
-        "includes":"prepare + publish + TCP delivery; excludes SQLite, TLS, API and browser"})
+        "includes":"prepare + publish + TCP delivery; excludes PostgreSQL, TLS, API and browser"})
     );
     Ok(())
 }

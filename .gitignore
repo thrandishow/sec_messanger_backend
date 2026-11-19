@@ -7,7 +7,9 @@ runtime/
 data/
 *.sqlite*
 *.log
+*.dump
 .DS_Store
 shifr-images.tar
 
 /broker/target/
+/api/target/

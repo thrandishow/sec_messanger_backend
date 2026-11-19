@@ -10,7 +10,7 @@
 | Метод | Путь | Тело / результат |
 | --- | --- | --- |
 | GET | `/health/live` | `{status:"ok"}` |
-| GET | `/health/ready` | `{status:"ok",broker:true}` либо HTTP 503 |
+| GET | `/health/ready` | `{status:"ok",broker:true}` при доступности брокера и PostgreSQL, иначе HTTP 503 |
 | GET | `/api/config` | protocolVersion=2, broker=shifr-rust, registration=admin, history=true, fileMaxBytes=10485760, messageMaxBytes=350, endToEndEncryption=false |
 | POST | `/api/auth/register` | Всегда 403 REGISTRATION_CLOSED |
 | POST | `/api/auth/login` | `{nickname,password}` → `{user,expiresAt}` + cookie |
@@ -78,7 +78,7 @@ subject — ID объекта или JSON с изменениями аккаун
 {"type":"message","id":42,"from":"alice","target":"bob","text":"Документ","time":"2026-11-13T12:00:00.000Z","attachment":{"id":"550e8400-e29b-41d4-a716-446655440000","name":"График.pdf","size":1024}}
 ```
 
-После проверки адресата брокером API сохраняет сообщение один раз в SQLite, затем
+После проверки адресата брокером API сохраняет сообщение один раз в PostgreSQL, затем
 публикует его через Rust-брокер. Всем получателям отдаётся одинаковый ID из истории.
 До получения события message отправка не подтверждена;
 подтверждения прочтения нет. После reconnect повторите join и загрузите history,
@@ -114,6 +114,6 @@ WS — 4096 байт на кадр, 5 команд/с, всплеск до 20; p
 на соединение. UI восстанавливает первые 20 доступных чатов; для остальных
 сначала покиньте один из подключённых.
 
-При обрыве после сохранения в SQLite рассылка и подтверждение могут не прийти.
+При обрыве после сохранения в PostgreSQL рассылка и подтверждение могут не прийти.
 После reconnect проверьте history перед повтором: идемпотентного ключа повторной
 отправки в браузерном API нет. Подробности: [брокер](broker.md).

@@ -1,4 +1,4 @@
-//! Authenticated, ephemeral LAN message router. SQLite durability and RBAC belong to the gateway.
+//! Authenticated, ephemeral LAN message router. PostgreSQL durability and RBAC belong to the gateway.
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{

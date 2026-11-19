@@ -9,6 +9,8 @@ test('offline startup loads images once and prohibits builds and pulls', t => {
   const dir = mkdtempSync(join(tmpdir(), 'shifr-offline-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   mkdirSync(join(dir, 'bin'));
+  mkdirSync(join(dir,'scripts'));
+  copyFileSync(resolve('scripts/ensure-db-password.sh'),join(dir,'scripts/ensure-db-password.sh'));
   copyFileSync(resolve('scripts/start-offline.sh'), join(dir, 'start.sh'));
   writeFileSync(join(dir, 'images.tar'), 'test archive');
   writeFileSync(join(dir, 'images.tar.sha256'), 'test checksum');
