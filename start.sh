@@ -33,7 +33,7 @@ if [ "$#" -gt 0 ] && [ "$1" != "$lan_ip" ]; then
   printf '%s\n' 'Уже настроен другой LAN-IP. Сначала обновите адрес, сертификат и ALLOWED_ORIGINS; существующие данные не перезаписаны.' >&2
   exit 1
 fi
-docker compose up --build -d --wait --wait-timeout 180
+docker compose up --build -d --remove-orphans --wait --wait-timeout 180
 printf '\nШифр-связь готова: https://%s:8443\n' "$lan_ip"
 printf '%s\n' 'Установите runtime/tls/ca.crt как доверенный CA на клиентских устройствах.'
 printf '%s\n' 'Создание первого администратора: см. docs/organization.md (публичная регистрация закрыта).'

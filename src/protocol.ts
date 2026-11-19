@@ -22,38 +22,3 @@ export type ServerEvent =
   | { type: 'topic'; channel: string; text: string }
   | { type: 'error'; code: string; message: string }
   | { type: 'pong' };
-
-export type IrcMessage = { tags: Record<string, string>; prefix?: string; command: string; params: string[] };
-
-export function parseIrcLine(line: string): IrcMessage | null {
-  const tags: Record<string, string> = Object.create(null);
-  let rest = line;
-  if (rest.startsWith('@')) {
-    const end = rest.indexOf(' ');
-    if (end === -1) return null;
-    for (const tag of rest.slice(1, end).split(';')) {
-      const equals = tag.indexOf('=');
-      const key = equals === -1 ? tag : tag.slice(0, equals);
-      const value = equals === -1 ? '' : tag.slice(equals + 1);
-      tags[key] = value.replace(/\\(.)/g, (_, c: string) => ({ ':': ';', s: ' ', r: '\r', n: '\n', '\\': '\\' }[c] ?? c));
-    }
-    rest = rest.slice(end + 1).trimStart();
-  }
-  let prefix: string | undefined;
-  if (rest.startsWith(':')) {
-    const end = rest.indexOf(' ');
-    if (end === -1) return null;
-    prefix = rest.slice(1, end);
-    rest = rest.slice(end + 1).trimStart();
-  }
-  const parts: string[] = [];
-  while (rest) {
-    if (rest.startsWith(':')) { parts.push(rest.slice(1)); break; }
-    const end = rest.indexOf(' ');
-    if (end === -1) { parts.push(rest); break; }
-    parts.push(rest.slice(0, end));
-    rest = rest.slice(end + 1).trimStart();
-  }
-  const command = parts.shift();
-  return command ? { tags, prefix, command: command.toUpperCase(), params: parts } : null;
-}

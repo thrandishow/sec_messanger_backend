@@ -47,11 +47,7 @@ runOpenSSL(['x509', '-req', '-in', 'runtime/tls/server.csr', '-CA', 'runtime/tls
   '-days', '365', '-sha256', '-extfile', 'runtime/tls/server.ext', '-out', 'runtime/tls/server.crt']);
 unlinkSync('runtime/tls/server.csr');
 unlinkSync('runtime/tls/server.ext');
-const ircPassword = randomBytes(32).toString('hex');
-writeFileSync('runtime/irc-connect.conf', `<connect name="gateway" allow="*" password="${ircPassword}"
-  hash="plaintext" resolvehostnames="no" localmax="1000" globalmax="1000"
-  maxchans="20" limit="1000" timeout="10s" pingfreq="60s" commandrate="10000" threshold="40">
-`, { mode: 0o600, flag: 'wx' });
+const brokerToken = randomBytes(32).toString('hex');
 writeFileSync('.env', `HOST=0.0.0.0
 PORT=8443
 LAN_IP=${ip}
@@ -61,9 +57,9 @@ ALLOWED_ORIGINS=https://${ip}:3000,https://${ip}:8443,https://localhost:3000,htt
 DATABASE_PATH=./data/shifr.sqlite
 TLS_CERT_PATH=./runtime/tls/server.crt
 TLS_KEY_PATH=./runtime/tls/server.key
-IRC_HOST=127.0.0.1
-IRC_PORT=6667
-IRC_PASSWORD=${ircPassword}
+BROKER_HOST=127.0.0.1
+BROKER_PORT=7000
+BROKER_TOKEN=${brokerToken}
 SESSION_TTL_SECONDS=86400
 TRUST_PROXY=0
 `, { mode: 0o600, flag: 'wx' });

@@ -33,7 +33,7 @@ TLS защищает транспорт, но не обеспечивает ск
 Проверьте интерфейсы командой `ip -4 addr show`: адрес Docker bridge не подходит.
 
 ```text
-Браузер → HTTPS/WSS → Nginx:8443 → HTTPS/WSS → API → IRC → InspIRCd
+Браузер → HTTPS/WSS → Nginx:8443 → HTTPS/WSS → API → JSON/TCP → Rust-брокер
            доверие к CA           доверие к тому же CA
 ```
 
@@ -71,7 +71,7 @@ sudo docker compose up --build -d --wait --wait-timeout 180
 В прежней версии запуск через sudo мог оставлять файлы у root при UID 1000
 в контейнерах; для таких установок см. исправление владельцев в разделе 8.
 
-Setup создаёт CA, серверную пару, `.env`, IRC-конфигурацию и каталог данных.
+Setup создаёт CA, серверную пару, `.env` с секретом брокера и каталог данных.
 Он отказывается перезаписывать существующие `.env` или `runtime/`.
 Для действующего сервера используйте раздел перевыпуска; не удаляйте конфигурацию
 ради повторного запуска setup.
@@ -164,7 +164,7 @@ sudo update-ca-certificates
 ключ. CA не меняется. При смене IP также обновляются `LAN_IP` и `ALLOWED_ORIGINS`.
 
 Предусмотрите короткое окно обслуживания: перезапуск API/Nginx разорвёт WebSocket.
-Ниже сохраняется InspIRCd; пользователи смогут переподключиться. Память браузера
+Ниже сохраняется Rust-брокер; пользователи смогут переподключиться. Память браузера
 не является долговременным хранилищем сообщений.
 
 Выполняйте блоки последовательно **в одной Bash-сессии**, обычным владельцем
@@ -252,7 +252,7 @@ openssl s_client -connect "${SHIFR_IP}:8443" \
 ```
 
 Ожидаются healthy для сервисов, `{"status":"ok"}` от frontend и
-`{"status":"ok","irc":true}` от API; у `s_client` — успешная проверка цепочки
+`{"status":"ok","broker":true}` от API; у `s_client` — успешная проверка цепочки
 и IP. Повторите проверку в браузере другого LAN-устройства с установленным CA.
 `curl --cacert` проверяет явный файл CA и не доказывает, что браузер уже доверяет ему.
 Не используйте `curl -k` как проверку готовности.
@@ -300,15 +300,15 @@ openssl x509 -in runtime/tls/ca.crt -checkend 2592000 -noout
 | Сертификат просрочен / ещё не действует | Проверить системное время сервера и клиента, затем `-dates` для CA и server |
 | Статика открывается, `/api` возвращает 502 | Проверить журнал web/API, CA и `DNS:localhost` в серверном сертификате |
 | TLS работает, API возвращает 403 | Проверить LAN-доступ и `ALLOWED_ORIGINS`; origin включает `https://`, адрес и порт `8443` |
-| `Permission denied` на `irc-connect.conf`, TLS или SQLite | Проверить владельцев и числовые UID/GID, а не открывать права всем |
+| `Permission denied` на TLS или SQLite | Проверить владельцев и числовые UID/GID, а не открывать права всем |
 
 Для диагностики из `project_back`:
 
 ```bash
 sudo docker compose ps
-sudo docker compose logs --tail=80 inspircd api web
+sudo docker compose logs --tail=80 broker api web
 ls -ldn runtime runtime/tls runtime/ca data
-ls -ln runtime/irc-connect.conf runtime/tls/server.crt runtime/tls/server.key
+ls -ln runtime/tls/server.crt runtime/tls/server.key
 awk -F= '$1 == "LOCAL_UID" || $1 == "LOCAL_GID" || $1 == "LAN_IP" { print }' .env
 ```
 
@@ -324,7 +324,7 @@ awk -F= '$1 == "LOCAL_UID" || $1 == "LOCAL_GID" || $1 == "LAN_IP" { print }' .en
 sudo docker compose down
 sudo chown -R "$(id -u):$(id -g)" runtime data .env
 chmod 700 runtime runtime/tls runtime/ca data
-chmod 600 .env runtime/irc-connect.conf runtime/tls/server.key runtime/ca/ca.key
+chmod 600 .env runtime/tls/server.key runtime/ca/ca.key
 sed -i "s/^LOCAL_UID=.*/LOCAL_UID=$(id -u)/; s/^LOCAL_GID=.*/LOCAL_GID=$(id -g)/" .env
 sudo docker compose up -d --wait --wait-timeout 180
 ```

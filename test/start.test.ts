@@ -29,7 +29,7 @@ esac
   assert.equal(readFileSync(join(back, '.env'), 'utf8'), content);
   const calls = readFileSync(join(back, 'calls.txt'), 'utf8');
   assert.equal(calls.split('\n').filter(line => line.includes('run --rm')).length, 1);
-  assert.equal(calls.split('\n').filter(line => line.includes('up --build -d --wait')).length, 2);
+  assert.equal(calls.split('\n').filter(line => line.includes('up --build -d --remove-orphans --wait')).length, 2);
   assert.equal(run('192.168.1.11').status, 1);
   assert.equal(readFileSync(join(back, '.env'), 'utf8'), content);
 });

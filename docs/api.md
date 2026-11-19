@@ -10,8 +10,8 @@
 | Метод | Путь | Тело / результат |
 | --- | --- | --- |
 | GET | `/health/live` | `{status:"ok"}` |
-| GET | `/health/ready` | `{status:"ok",irc:true}` либо HTTP 503 |
-| GET | `/api/config` | protocolVersion=2, registration=admin, history=true, fileMaxBytes=10485760, messageMaxBytes=350, endToEndEncryption=false |
+| GET | `/health/ready` | `{status:"ok",broker:true}` либо HTTP 503 |
+| GET | `/api/config` | protocolVersion=2, broker=shifr-rust, registration=admin, history=true, fileMaxBytes=10485760, messageMaxBytes=350, endToEndEncryption=false |
 | POST | `/api/auth/register` | Всегда 403 REGISTRATION_CLOSED |
 | POST | `/api/auth/login` | `{nickname,password}` → `{user,expiresAt}` + cookie |
 | GET | `/api/auth/me` | `{user,expiresAt}` |
@@ -65,21 +65,22 @@ subject — ID объекта или JSON с изменениями аккаун
 Произвольные каналы создавать через join нельзя. Обычный сотрудник читает
 #announcements, но писать может только модератор или администратор.
 Проверки ролей выполняются на сервере для каждой команды, а не только в UI.
-IRC-префикс оператора (`@`) не является ролью приложения.
+Роли хранятся в API; поле prefix участников всегда пустое.
 
 Текст: до 350 байт UTF-8, одна строка без управляющих символов. Вложения передаются
 через HTTP; текст и метаданные сообщения — через WS. Для отправки в канал нужно
 вступить в него; личный адресат должен быть активным аккаунтом онлайн.
 
-События: ready, join, part, quit, names, topic, message, pong, error. Пример сохранённого
+События: ready, join, part, quit, names, message, pong, error. Пример сохранённого
 сообщения с файлом:
 
 ```json
 {"type":"message","id":42,"from":"alice","target":"bob","text":"Документ","time":"2026-11-13T12:00:00.000Z","attachment":{"id":"550e8400-e29b-41d4-a716-446655440000","name":"График.pdf","size":1024}}
 ```
 
-API сохраняет сообщение один раз по IRC-эху отправителя. Всем получателям отдаётся
-одинаковый ID, используемый и в истории. До получения эха отправка не подтверждена;
+После проверки адресата брокером API сохраняет сообщение один раз в SQLite, затем
+публикует его через Rust-брокер. Всем получателям отдаётся одинаковый ID из истории.
+До получения события message отправка не подтверждена;
 подтверждения прочтения нет. После reconnect повторите join и загрузите history,
 объединяя события по ID. Один отправитель может ждать подтверждения одного сообщения.
 
@@ -100,13 +101,19 @@ API сохраняет сообщение один раз по IRC-эху отп
 | 507 | STORAGE_FULL — квота файлов исчерпана |
 
 Дополнительные WS-коды: NOT_READY, NOT_JOINED, INVALID_JSON, INVALID_COMMAND,
-MESSAGE_PENDING, MESSAGE_TIMEOUT, STORAGE_ERROR, FORBIDDEN, IRC_401 (адресат офлайн)
-и прочие IRC_<число>, IRC_UNAVAILABLE/DISCONNECTED/TIMEOUT.
+MESSAGE_PENDING, MESSAGE_TIMEOUT, STORAGE_ERROR, FORBIDDEN, BROKER_RECIPIENT_OFFLINE (адресат офлайн),
+BROKER_ROOM_LIMIT, BROKER_ROOM_FULL, BROKER_DUPLICATE_NICK,
+BROKER_UNAVAILABLE, BROKER_DISCONNECTED, BROKER_TIMEOUT, BROKER_OVERLOADED,
+BROKER_AUTH_FAILED, BROKER_PROTOCOL, BROKER_INVALID_COMMIT.
 
 JSON HTTP — 4096 байт; upload — 10 МиБ; общая квота содержимого файлов — 1 ГиБ.
 HTTP — 120 запросов в минуту на IP, вход и загрузка файлов — по 10 на маршрут/IP.
 WS — 4096 байт на кадр, 5 команд/с, всплеск до 20; ping каждые 30 секунд.
 Переполнение очереди, истечение сессии, выход или административное изменение
-аккаунта закрывают WSS; перепроверьте `/api/auth/me`. Лимит каналов InspIRCd — 20
+аккаунта закрывают WSS; перепроверьте `/api/auth/me`. Лимит комнат Rust-брокера — 20
 на соединение. UI восстанавливает первые 20 доступных чатов; для остальных
 сначала покиньте один из подключённых.
+
+При обрыве после сохранения в SQLite рассылка и подтверждение могут не прийти.
+После reconnect проверьте history перед повтором: идемпотентного ключа повторной
+отправки в браузерном API нет. Подробности: [брокер](broker.md).

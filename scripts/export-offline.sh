@@ -13,11 +13,11 @@ mkdir -m 700 "$1"
 package_dir=$1
 docker compose build
 docker compose -f compose.setup.yaml build
-docker save -o "$package_dir/images.tar" shifr-svyaz-api:0.1.0 shifr-svyaz-web:0.1.0 shifr-svyaz-inspircd:4.12.1 shifr-svyaz-setup:0.1.0
+docker save -o "$package_dir/images.tar" shifr-svyaz-api:0.1.0 shifr-svyaz-web:0.1.0 shifr-svyaz-broker:0.1.0 shifr-svyaz-setup:0.1.0
 cp compose.yaml compose.setup.yaml "$package_dir/"
 cp scripts/start-offline.sh "$package_dir/start.sh"
 mkdir "$package_dir/docs"
-cp docs/organization.md docs/certificates-sre.md "$package_dir/docs/"
+cp docs/organization.md docs/certificates-sre.md docs/broker.md "$package_dir/docs/"
 (
   cd "$package_dir"
   if command -v sha256sum >/dev/null 2>&1; then

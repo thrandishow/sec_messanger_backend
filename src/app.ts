@@ -8,7 +8,8 @@ import { z } from 'zod';
 import { WebSocket } from 'ws';
 import { isLocalAddress, type Config } from './config.js';
 import { Store } from './store.js';
-import { IrcBridge, probeIrc } from './irc.js';
+import { randomUUID } from 'node:crypto';
+import { BrokerBridge, probeBroker, type BrokerEvent } from './broker.js';
 import { organizationRoutes, FILE_LIMIT } from './organization.js';
 import { clientCommandSchema, nicknameSchema, type ServerEvent } from './protocol.js';
 
@@ -26,7 +27,7 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
     ...(config.tlsCert && config.tlsKey ? { https: { cert: readFileSync(config.tlsCert), key: readFileSync(config.tlsKey) } } : {}),
   });
   const store = new Store(config.databasePath);
-  const active = new Map<string, { socket: WebSocket; tokenHash: string; close: () => void; emit: (event: ServerEvent) => void; joined: Set<string> }>();
+  const active = new Map<string, { socket: WebSocket; tokenHash: string; close: () => void }>();
 
   app.addHook('onRequest', async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
@@ -60,12 +61,12 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
 
   app.get('/health/live', async () => ({ status: 'ok' }));
   app.get('/health/ready', async (_request, reply) => {
-    const irc = await probeIrc(config);
-    return reply.code(irc ? 200 : 503).send({ status: irc ? 'ok' : 'unavailable', irc });
+    const broker = await probeBroker(config);
+    return reply.code(broker ? 200 : 503).send({ status: broker ? 'ok' : 'unavailable', broker });
   });
   organizationRoutes(app, store, id => active.get(id)?.close());
   app.get('/api/config', async () => ({ name: 'Шифр-связь', protocolVersion: 2,
-    registration: 'admin', messageMaxBytes: 350, history: true, fileMaxBytes: FILE_LIMIT, endToEndEncryption: false }));
+    broker: 'shifr-rust', registration: 'admin', messageMaxBytes: 350, history: true, fileMaxBytes: FILE_LIMIT, endToEndEncryption: false }));
   app.post('/api/auth/register', async (_request, reply) => reply.code(403).send({ error: 'REGISTRATION_CLOSED' }));
 
   app.post('/api/auth/login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async (request, reply) => {
@@ -118,35 +119,47 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
       socket.send(JSON.stringify(event));
     };
     const joined = new Set<string>();
-    let pending: { target: string; text: string; attachmentId?: string } | null = null;
+    let pending: { requestId: string; savedId?: number; target: string; text: string; attachmentId?: string } | null = null;
     let pendingTimer: NodeJS.Timeout | undefined;
-    const emit = (event: ServerEvent) => {
+    const emit = (event: BrokerEvent) => {
       if (event.type === 'join' && event.nickname === session.user.nickname) joined.add(event.channel);
       if (event.type === 'part' && event.nickname === session.user.nickname) joined.delete(event.channel);
-      if (event.type === 'error') { pending = null; clearTimeout(pendingTimer); }
-      if (event.type !== 'message') { deliver(event); return; }
-      // A single persistence point: only the sender's IRC echo confirms delivery.
-      // Other IRC connections receive the same message; ignoring those avoids duplicate rows.
-      if (event.from !== session.user.nickname || !pending || event.target !== pending.target || event.text !== pending.text) return;
-      const outgoing = pending;
-      pending = null; clearTimeout(pendingTimer);
-      const currentSession = sessionFrom(request.cookies[COOKIE_NAME]);
-      if (!currentSession || !store.canWrite(currentSession.user, event.target)) return;
-      try {
-        const saved = store.recordMessage(currentSession.user, event.target, event.text, event.time, outgoing.attachmentId);
-        for (const [id, connection] of active) {
-          const viewer = store.user(id);
-          if (!viewer?.active) continue;
-          const allowed = event.target.startsWith('#')
-            ? connection.joined.has(event.target) && store.canRead(viewer, event.target)
-            : id === currentSession.user.id || viewer.nickname === event.target;
-          if (allowed) connection.emit({ type: 'message', ...saved });
+      if (event.type === 'error') {
+        if (pending && event.requestId === pending.requestId) {
+          bridge.cancel(pending.requestId); pending = null; clearTimeout(pendingTimer);
         }
-      } catch {
-        deliver({ type: 'error', code: 'STORAGE_ERROR', message: 'Message was not saved. Try again.' });
+        deliver({ type: 'error', code: event.code, message: event.message }); return;
       }
+      if (event.type === 'accepted') {
+        if (!pending || pending.requestId !== event.requestId || pending.target !== event.target || pending.savedId) return;
+        const currentSession = sessionFrom(request.cookies[COOKIE_NAME]);
+        if (!currentSession || !store.canWrite(currentSession.user, event.target)) {
+          bridge.cancel(event.requestId); pending = null; clearTimeout(pendingTimer); return;
+        }
+        try {
+          // Commit to SQLite exactly once before any message is fanned out by Rust.
+          const saved = store.recordMessage(currentSession.user, pending.target, pending.text, new Date().toISOString(), pending.attachmentId);
+          pending.savedId = saved.id;
+          bridge.publish(event.requestId, saved);
+        } catch {
+          bridge.cancel(event.requestId); pending = null; clearTimeout(pendingTimer);
+          deliver({ type: 'error', code: 'STORAGE_ERROR', message: 'Message was not saved. Try again.' });
+        }
+        return;
+      }
+      if (event.type === 'message') {
+        const current = sessionFrom(request.cookies[COOKIE_NAME]);
+        if (!current) return;
+        const conversation = event.target.startsWith('#') ? event.target : event.from === current.user.nickname ? event.target : event.from;
+        if (!store.canRead(current.user, conversation) || (event.target.startsWith('#') && !joined.has(event.target))) return;
+        if (!event.target.startsWith('#') && event.from !== current.user.nickname && event.target !== current.user.nickname) return;
+        if (event.from === current.user.nickname && event.id === pending?.savedId) {
+          pending = null; clearTimeout(pendingTimer);
+        }
+      }
+      deliver(event);
     };
-    const bridge = new IrcBridge(config, session.user.nickname, emit, () => socket.close(1011, 'IRC unavailable'));
+    const bridge = new BrokerBridge(config, session.user.nickname, emit, () => socket.close(1011, 'Broker unavailable'));
     let cleaned = false;
     let alive = true;
     let tokens = 20;
@@ -167,7 +180,7 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
       alive = false;
       socket.ping();
     }, 30_000);
-    active.set(session.user.id, { socket, tokenHash: session.tokenHash, close, emit: deliver, joined });
+    active.set(session.user.id, { socket, tokenHash: session.tokenHash, close });
     socket.on('pong', () => { alive = true; });
     socket.on('error', close);
     socket.on('close', cleanup);
@@ -181,15 +194,19 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
       if (binary) return socket.close(1003, 'Text JSON required');
       let value: unknown;
       try { value = JSON.parse(data.toString()); } catch {
-        emit({ type: 'error', code: 'INVALID_JSON', message: 'Expected JSON' });
+        deliver({ type: 'error', code: 'INVALID_JSON', message: 'Expected JSON' });
         return;
       }
       const parsed = clientCommandSchema.safeParse(value);
       if (!parsed.success) {
-        emit({ type: 'error', code: 'INVALID_COMMAND', message: 'Invalid command or message exceeds 350 UTF-8 bytes' });
+        deliver({ type: 'error', code: 'INVALID_COMMAND', message: 'Invalid command or message exceeds 350 UTF-8 bytes' });
         return;
       }
       const command = parsed.data;
+      // Do not change membership while a prepared message is being committed.
+      if (pending && command.type !== 'ping') {
+        deliver({ type: 'error', code: 'MESSAGE_PENDING', message: 'Wait for confirmation' }); return;
+      }
       const currentUser = sessionFrom(request.cookies[COOKIE_NAME])?.user;
       if (!currentUser) return close();
       if (command.type !== 'ping') {
@@ -204,14 +221,16 @@ export async function buildApp(config: Config, options: { logger?: boolean } = {
           if (command.attachmentId && !store.attachmentAllowed(currentUser, command.attachmentId, target)) {
             deliver({ type: 'error', code: 'FORBIDDEN', message: 'Attachment unavailable' }); return;
           }
-          pending = command;
+          pending = { ...command, requestId: randomUUID() };
           pendingTimer = setTimeout(() => {
             pending = null;
-            deliver({ type: 'error', code: 'MESSAGE_TIMEOUT', message: 'No server confirmation' });
+            deliver({ type: 'error', code: 'MESSAGE_TIMEOUT', message: 'Check history before retrying' });
+            close();
           }, 10_000);
         }
       }
-      bridge.command(command);
+      if (command.type === 'message') bridge.prepare(pending!.requestId, command.target);
+      else bridge.command(command);
     });
   });
 

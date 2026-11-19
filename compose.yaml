@@ -1,19 +1,19 @@
 name: shifr-svyaz
 services:
-  inspircd:
-    image: shifr-svyaz-inspircd:4.12.1
+  broker:
+    image: shifr-svyaz-broker:0.1.0
     build:
       context: .
-      dockerfile: docker/inspircd/Dockerfile
+      dockerfile: broker/Dockerfile
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     restart: unless-stopped
     init: true
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
-    tmpfs: [/tmp]
-    volumes:
-      - ./runtime/irc-connect.conf:/run/shifr/irc-connect.conf:ro
+    environment:
+      BROKER_BIND: 0.0.0.0:7000
+      BROKER_TOKEN: "${BROKER_TOKEN:-${IRC_PASSWORD:-}}"
     networks: [local]
 
   api:
@@ -30,8 +30,8 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8443
-      IRC_HOST: inspircd
-      IRC_PORT: 6667
+      BROKER_HOST: broker
+      BROKER_PORT: 7000
       DATABASE_PATH: /app/data/shifr.sqlite
       TLS_CERT_PATH: /app/runtime/tls/server.crt
       TLS_KEY_PATH: /app/runtime/tls/server.key
@@ -40,7 +40,7 @@ services:
       - ./runtime/tls:/app/runtime/tls:ro
       - ./data:/app/data
     depends_on:
-      inspircd:
+      broker:
         condition: service_healthy
     networks: [local]
 

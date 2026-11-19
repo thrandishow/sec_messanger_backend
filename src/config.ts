@@ -18,9 +18,10 @@ const envSchema = z.object({
   DATABASE_PATH: z.string().default('./data/shifr.sqlite'),
   TLS_CERT_PATH: z.string().optional(),
   TLS_KEY_PATH: z.string().optional(),
-  IRC_HOST: z.string().default('127.0.0.1'),
-  IRC_PORT: z.coerce.number().int().min(1).max(65535).default(6667),
-  IRC_PASSWORD: z.string().regex(/^[a-f0-9]{64}$/),
+  BROKER_HOST: z.string().default('127.0.0.1'),
+  BROKER_PORT: z.coerce.number().int().min(1).max(65535).default(7000),
+  BROKER_TOKEN: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  IRC_PASSWORD: z.string().regex(/^[a-f0-9]{64}$/).optional(), // Migration fallback only.
   REGISTRATION_TOKEN: z.string().regex(/^[a-f0-9]{64}$/).optional(), // Legacy configuration, no longer used for access.
   SESSION_TTL_SECONDS: z.coerce.number().int().min(60).max(604800).default(86400),
   TRUST_PROXY: z.enum(['0', '1']).default('0'),
@@ -35,6 +36,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     throw new Error(`Invalid configuration: ${parsed.error.issues.map(i => i.path.join('.')).join(', ')}`);
   }
   const e = parsed.data;
+  const brokerToken = e.BROKER_TOKEN ?? e.IRC_PASSWORD;
+  if (!brokerToken) throw new Error('Missing BROKER_TOKEN');
   const tls = Boolean(e.TLS_CERT_PATH && e.TLS_KEY_PATH);
   if (Boolean(e.TLS_CERT_PATH) !== Boolean(e.TLS_KEY_PATH)) throw new Error('Set both TLS paths');
   if (e.HOST !== '0.0.0.0' && !isLocalAddress(e.HOST)) throw new Error('HOST must be a local IP');
@@ -53,7 +56,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
   return {
     host: e.HOST, port: e.PORT, origins, databasePath: e.DATABASE_PATH,
     tlsCert: e.TLS_CERT_PATH, tlsKey: e.TLS_KEY_PATH, secureCookies: tls,
-    ircHost: e.IRC_HOST, ircPort: e.IRC_PORT, ircPassword: e.IRC_PASSWORD,
+    brokerHost: e.BROKER_HOST, brokerPort: e.BROKER_PORT, brokerToken,
     registrationToken: e.REGISTRATION_TOKEN, sessionTtlSeconds: e.SESSION_TTL_SECONDS,
     trustProxy: e.TRUST_PROXY === '1',
   };

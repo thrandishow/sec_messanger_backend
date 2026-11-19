@@ -59,11 +59,11 @@ function inbox(ws: WebSocket) {
   };
 }
 
-test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and outage', { timeout: 30_000 }, async t => {
-  assert.ok(process.env.INSPIRCD_BINARY, 'Set INSPIRCD_BINARY to a built InspIRCd 4.12.1 executable');
+test('Rust broker: HTTPS auth, WSS rooms, direct messages, logout, expiry, and outage', { timeout: 30_000 }, async t => {
+  assert.ok(process.env.BROKER_BINARY, 'Set BROKER_BINARY to a built shifr-broker executable');
   const dir = mkdtempSync(join(tmpdir(), 'shifr-integration-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
-  const ircPort = await freePort();
+  const brokerPort = await freePort();
   const proxied = process.env.SHIFR_TEST_PROXY === '1';
   if (proxied) assert.ok(process.env.NGINX_BINARY, 'Set NGINX_BINARY to a local Nginx executable');
   const proxyPort = proxied ? await freePort() : 3000;
@@ -71,23 +71,18 @@ test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and
     { cwd: dir, stdio: 'ignore' }).status, 0);
   const ca = readFileSync(join(dir, 'runtime/tls/ca.crt'));
   const config = loadConfig({ ...parseEnv(readFileSync(join(dir, '.env'), 'utf8')),
-    HOST: '127.0.0.1', IRC_PORT: String(ircPort), ALLOWED_ORIGINS: `https://127.0.0.1:${proxyPort}`,
+    HOST: '127.0.0.1', BROKER_PORT: String(brokerPort), ALLOWED_ORIGINS: `https://127.0.0.1:${proxyPort}`,
     TRUST_PROXY: proxied ? '1' : '0',
     TLS_CERT_PATH: join(dir, 'runtime/tls/server.crt'), TLS_KEY_PATH: join(dir, 'runtime/tls/server.key'),
     DATABASE_PATH: join(dir, 'db.sqlite') });
-  const connectFile = join(dir, 'runtime/irc-connect.conf');
-  const ircConfig = readFileSync(resolve('docker/inspircd/inspircd.conf'), 'utf8')
-    .replace('address="0.0.0.0" port="6667"', `address="127.0.0.1" port="${ircPort}"`)
-    .replace('/run/shifr/irc-connect.conf', connectFile);
-  const configFile = join(dir, 'inspircd.conf');
-  writeFileSync(configFile, ircConfig);
-  const ircd = spawn(process.env.INSPIRCD_BINARY, ['--nofork', '--nopid', '--nolog', '--config', configFile], { stdio: 'ignore' });
+  const broker = spawn(process.env.BROKER_BINARY!, [], {
+    env: { ...process.env, BROKER_TOKEN: config.brokerToken, BROKER_BIND: `127.0.0.1:${brokerPort}` }, stdio: 'ignore' });
   t.after(async () => {
-    if (ircd.exitCode === null && ircd.signalCode === null) {
-      const exited = once(ircd, 'exit'); ircd.kill('SIGTERM'); await exited;
+    if (broker.exitCode === null && broker.signalCode === null) {
+      const exited = once(broker, 'exit'); broker.kill('SIGTERM'); await exited;
     }
   });
-  await portReady(ircPort);
+  await portReady(brokerPort);
   const seed = new Store(config.databasePath);
   await seed.register('alice', 'test-password-123', 'admin');
   await seed.register('bob', 'test-password-123', 'member', '#finance');
@@ -189,7 +184,10 @@ test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and
   aliceEvents.send({ type: 'names', channel: '#general' });
   const names = await aliceEvents.wait(e => e.type === 'names' && e.members.some(m => m.nickname === 'bob'));
   assert.equal(names.type === 'names' && names.members.length, 2);
+  // An earlier command's error must not cancel the next message's preparation.
+  aliceEvents.send({ type: 'names', channel: '#announcements' });
   aliceEvents.send({ type: 'message', target: '#general', text: 'Привет из LAN 🔐' });
+  await aliceEvents.wait(e => e.type === 'error' && e.code === 'NOT_JOINED');
   const received = await bobEvents.wait(e => e.type === 'message');
   assert.equal(received.type === 'message' && received.text, 'Привет из LAN 🔐');
   assert.equal(received.type === 'message' && received.from, 'alice');
@@ -197,7 +195,7 @@ test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and
   const echo = await aliceEvents.wait(e => e.type === 'message' && e.text === 'Привет из LAN 🔐');
   assert.equal(echo.type === 'message' && echo.id, received.type === 'message' && received.id);
   const history = JSON.parse((await http('/api/history?target=%23general', undefined, bobCookie)).body).messages;
-  assert.equal(history.length, 1, 'One SQLite row despite two IRC recipients');
+  assert.equal(history.length, 1, 'One SQLite row despite two broker recipients');
   assert.equal(history[0].id, echo.type === 'message' && echo.id);
   bobEvents.send({ type: 'join', channel: '#private' });
   await bobEvents.wait(e => e.type === 'error' && e.code === 'FORBIDDEN');
@@ -237,6 +235,10 @@ test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and
   assert.equal((await http('/api/auth/logout', {}, aliceCookie)).status, 204);
   await aliceClosed;
   await rejectedWs(aliceCookie, origin, 401);
+  const beforeOffline = JSON.parse((await http('/api/history?target=alice', undefined, bobCookie)).body).messages;
+  bobEvents.send({ type: 'message', target: 'alice', text: 'Offline must not be saved' });
+  await bobEvents.wait(e => e.type === 'error' && e.code === 'BROKER_RECIPIENT_OFFLINE');
+  assert.deepEqual(JSON.parse((await http('/api/history?target=alice', undefined, bobCookie)).body).messages, beforeOffline);
 
   await t.test('session expiry disconnects a live WebSocket', async sub => {
     const shortPath = join(dir, 'expiry.sqlite');
@@ -257,9 +259,9 @@ test('real InspIRCd: HTTPS auth, WSS rooms, direct messages, logout, expiry, and
   });
 
   const bobClosed = once(bob, 'close');
-  const ircExited = once(ircd, 'exit');
-  ircd.kill('SIGTERM');
-  await ircExited;
+  const brokerExited = once(broker, 'exit');
+  broker.kill('SIGTERM');
+  await brokerExited;
   await bobClosed;
   assert.equal((await http('/health/ready')).status, 503);
   assert.equal((await http('/health/live')).status, 200);

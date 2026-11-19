@@ -1,18 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clientCommandSchema, parseIrcLine } from '../src/protocol.js';
+import { clientCommandSchema } from '../src/protocol.js';
 import { isLocalAddress, loadConfig } from '../src/config.js';
 
-test('IRCv3 tags, prefixes, and trailing text are preserved', () => {
-  const m = parseIrcLine('@time=2026-11-09T12:00:00.000Z;label=hello\\sworld :alice!u@host PRIVMSG #general :Привет, мир');
-  assert.equal(m?.tags.time, '2026-11-09T12:00:00.000Z');
-  assert.equal(m?.tags.label, 'hello world');
-  assert.deepEqual(m?.params, ['#general', 'Привет, мир']);
-  assert.equal(parseIrcLine('PING :abc')?.params[0], 'abc');
-  assert.equal(parseIrcLine(':broken'), null);
-});
-
-test('JSON protocol rejects IRC injection, multiple targets, and UTF-8 overflow', () => {
+test('JSON protocol rejects control-character injection, multiple targets, and UTF-8 overflow', () => {
   for (const text of ['hello\r\nOPER root', 'hello\0', '\x01ACTION test\x01', 'я'.repeat(176)]) {
     assert.equal(clientCommandSchema.safeParse({ type: 'message', target: '#general', text }).success, false);
   }
@@ -38,6 +29,14 @@ test('configuration refuses LAN plaintext, wildcard origins, and missing secrets
   assert.throws(() => loadConfig({ ...env, HOST: '0.0.0.0' }), /TLS/);
   assert.throws(() => loadConfig({ ...env, ALLOWED_ORIGINS: '*' }), /ORIGINS/);
   assert.throws(() => loadConfig({ ...env, ALLOWED_ORIGINS: 'http://evil.example' }), /ORIGINS/);
-  assert.throws(() => loadConfig({ ...env, IRC_PASSWORD: undefined }), /IRC_PASSWORD/);
+  assert.throws(() => loadConfig({ ...env, IRC_PASSWORD: undefined }), /BROKER_TOKEN/);
   assert.throws(() => loadConfig({ ...env, TLS_CERT_PATH: 'x' }), /both TLS/);
+});
+
+
+test('new broker token takes precedence; legacy secret migrates without rewriting secrets', () => {
+  const base = { ALLOWED_ORIGINS: 'http://127.0.0.1:3000', IRC_PASSWORD: 'a'.repeat(64) };
+  assert.equal(loadConfig(base).brokerToken, base.IRC_PASSWORD);
+  assert.equal(loadConfig({ ...base, BROKER_TOKEN: 'b'.repeat(64) }).brokerToken, 'b'.repeat(64));
+  assert.equal(loadConfig(base).brokerPort, 7000);
 });
