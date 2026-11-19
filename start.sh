@@ -30,7 +30,7 @@ if [ -z "$lan_ip" ]; then
   exit 1
 fi
 if [ "$#" -gt 0 ] && [ "$1" != "$lan_ip" ]; then
-  printf '%s\n' 'Уже настроен другой LAN-IP. Сначала обновите адрес, сертификат и ALLOWED_ORIGINS; существующие данные не перезаписаны.' >&2
+  printf '%s\n' 'Уже настроен другой LAN-IP. Выполните ./change-ip.py --compose <новый-IP>.' >&2
   exit 1
 fi
 sh scripts/ensure-db-password.sh

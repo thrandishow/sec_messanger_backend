@@ -31,7 +31,7 @@ flock -n 9 || fail 'Установка уже выполняется.'
 
 if [[ -f .env ]]; then
   ip=$(awk -F= '$1 == "LAN_IP" { print $2; exit }' .env)
-  [[ -n "$ip" && (-z "$ip_arg" || "$ip_arg" == "$ip") ]] || fail 'LAN-IP отличается от сохранённого. Проверьте адрес и сертификат установки.'
+  [[ -n "$ip" && (-z "$ip_arg" || "$ip_arg" == "$ip") ]] || fail 'LAN-IP отличается от сохранённого. Выполните ./change-ip.py --native <новый-IP>.'
 else
   ip=$ip_arg
   [[ -n "$ip" ]] || fail 'Первый запуск: ./start-linux.sh <LAN-IP>'

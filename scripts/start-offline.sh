@@ -14,7 +14,7 @@ if [ ! -f .env ]; then
 fi
 lan_ip=$(awk -F= '$1 == "LAN_IP" { print $2; exit }' .env)
 if [ -z "$lan_ip" ]; then printf '%s\n' 'LAN_IP отсутствует в .env.' >&2; exit 1; fi
-if [ "$#" -gt 0 ] && [ "$1" != "$lan_ip" ]; then printf '%s\n' 'Для смены IP перевыпустите сертификат: docs/certificates-sre.md.' >&2; exit 1; fi
+if [ "$#" -gt 0 ] && [ "$1" != "$lan_ip" ]; then printf '%s\n' 'Для смены адреса выполните ./change-ip.py --compose <новый-IP>.' >&2; exit 1; fi
 sh scripts/ensure-db-password.sh
 docker compose up -d --no-build --pull never --remove-orphans --wait --wait-timeout 180
 printf 'Шифр-связь: https://%s:8443\n' "$lan_ip"

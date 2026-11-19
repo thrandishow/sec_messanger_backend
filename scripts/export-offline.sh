@@ -16,7 +16,7 @@ docker compose pull postgres
 docker compose build
 docker compose -f compose.setup.yaml build
 docker save -o "$package_dir/images.tar" postgres:17-bookworm shifr-svyaz-api:0.1.0 shifr-svyaz-web:0.1.0 shifr-svyaz-broker:0.1.0 shifr-svyaz-setup:0.1.0
-cp compose.yaml compose.setup.yaml "$package_dir/"
+cp compose.yaml compose.setup.yaml change-ip.py "$package_dir/"
 cp scripts/start-offline.sh "$package_dir/start.sh"
 mkdir -p "$package_dir/docs" "$package_dir/docker/postgres" "$package_dir/scripts"
 cp docker/postgres/init.sql "$package_dir/docker/postgres/"
