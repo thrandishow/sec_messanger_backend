@@ -8,7 +8,7 @@
   },
   "scripts": {
     "setup": "node scripts/setup.mjs",
-    "build": "cargo build --locked --manifest-path api/Cargo.toml && cargo build --locked --manifest-path broker/Cargo.toml",
+    "build": "cargo build --locked --manifest-path api/Cargo.toml && cargo build --locked --manifest-path broker/Cargo.toml && cargo build --locked --manifest-path admin/Cargo.toml",
     "test": "node scripts/test-postgres.mjs test/*.test.ts",
     "test:integration": "node scripts/test-postgres.mjs test/integration/*.test.ts",
     "test:stack": "SHIFR_TEST_PROXY=1 node scripts/test-postgres.mjs test/integration/*.test.ts",

@@ -31,7 +31,7 @@ flock -n 9 || fail 'Установка уже выполняется.'
 
 if [[ -f .env ]]; then
   ip=$(awk -F= '$1 == "LAN_IP" { print $2; exit }' .env)
-  [[ -n "$ip" && (-z "$ip_arg" || "$ip_arg" == "$ip") ]] || fail 'LAN-IP отличается от сохранённого. Выполните ./change-ip.py --native <новый-IP>.'
+  [[ -n "$ip" && (-z "$ip_arg" || "$ip_arg" == "$ip") ]] || fail 'LAN-IP отличается от сохранённого. Выполните ./shifrctl set-ip --native <новый-IP>.'
 else
   ip=$ip_arg
   [[ -n "$ip" ]] || fail 'Первый запуск: ./start-linux.sh <LAN-IP>'
@@ -80,10 +80,7 @@ fi
 stage=$(mktemp -d "$state/.stage.XXXXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 if [[ ! -f .env ]]; then
-  [[ ! -e runtime ]] || fail 'Найдена прежняя runtime/ без .env. Восстановите конфигурацию из копии.'
-  (cd "$stage" && node "$project/scripts/setup.mjs" --ip "$ip" >/dev/null)
-  mv -- "$stage/runtime" .
-  mv -- "$stage/.env" .
+  "$project/shifrctl" init --native --root "$state" "$ip"
 fi
 node "$project/linux/configure.mjs" "$front/nginx.conf"
 mkdir -p -- tmp "$units"

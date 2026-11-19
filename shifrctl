@@ -1,0 +1,30 @@
+#!/bin/sh
+# The CLI runs on the host so interface discovery, service control and HTTPS see the real LAN.
+set -eu
+project=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$project"
+binary="$project/admin/target/release/shifrctl"
+if [ -x "$project/bin/shifrctl-linux" ] && [ "$(uname -s)" = Linux ]; then
+  exec "$project/bin/shifrctl-linux" "$@"
+fi
+if [ "$(id -u)" != 0 ] && command -v cargo >/dev/null 2>&1 && [ -f admin/Cargo.toml ]; then
+  CARGO_TARGET_DIR="$project/admin/target" cargo build --quiet --release --locked --manifest-path admin/Cargo.toml
+  exec "$binary" "$@"
+fi
+if [ -x "$binary" ]; then exec "$binary" "$@"; fi
+if [ "$(uname -s)" != Linux ]; then
+  printf '%s\n' 'Для обслуживания с macOS соберите shifrctl с Cargo (Rust 1.91+). Для запуска через Docker используйте ./start.sh.' >&2
+  exit 1
+fi
+# Extract the static Linux executable from the same image used for setup.
+image=shifr-svyaz-setup:0.2.0
+if ! docker image inspect "$image" >/dev/null 2>&1; then
+  docker compose -f compose.setup.yaml build setup >&2
+fi
+umask 077
+work=$(mktemp -d)
+trap 'rm -rf -- "$work"' EXIT
+docker run --rm --pull never --network none --entrypoint /bin/cat "$image" /usr/local/bin/shifrctl > "$work/shifrctl"
+chmod 700 "$work/shifrctl"
+# init drops sudo privileges; execute the image binary before dropping them.
+"$work/shifrctl" "$@"

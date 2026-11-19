@@ -13,3 +13,7 @@ shifr-images.tar
 
 /broker/target/
 /api/target/
+
+/admin/target/
+# shifrctl temporarily stages private installation files in the project directory.
+/.tmp*

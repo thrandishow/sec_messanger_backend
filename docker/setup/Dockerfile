@@ -1,6 +1,12 @@
-FROM node:24.22.2-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends openssl \
-    && rm -rf /var/lib/apt/lists/*
-COPY scripts/setup.mjs /opt/shifr/setup.mjs
+FROM rust:1.91.1-alpine AS build
+RUN apk add --no-cache musl-dev
+WORKDIR /build
+COPY admin/Cargo.toml admin/Cargo.lock ./
+COPY admin/src ./src
+RUN cargo build --release --locked
+
+FROM alpine:3.22
+RUN apk add --no-cache openssl
+COPY --from=build /build/target/release/shifrctl /usr/local/bin/shifrctl
 WORKDIR /work
-ENTRYPOINT ["node", "/opt/shifr/setup.mjs"]
+ENTRYPOINT ["shifrctl"]

@@ -2,7 +2,7 @@
 name: shifr-svyaz-setup
 services:
   setup:
-    image: shifr-svyaz-setup:0.1.0
+    image: shifr-svyaz-setup:0.2.0
     build:
       context: .
       dockerfile: docker/setup/Dockerfile

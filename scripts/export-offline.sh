@@ -15,8 +15,11 @@ package_dir=$1
 docker compose pull postgres
 docker compose build
 docker compose -f compose.setup.yaml build
-docker save -o "$package_dir/images.tar" postgres:17-bookworm shifr-svyaz-api:0.1.0 shifr-svyaz-web:0.1.0 shifr-svyaz-broker:0.1.0 shifr-svyaz-setup:0.1.0
-cp compose.yaml compose.setup.yaml change-ip.py "$package_dir/"
+docker save -o "$package_dir/images.tar" postgres:17-bookworm shifr-svyaz-api:0.1.0 shifr-svyaz-web:0.1.0 shifr-svyaz-broker:0.1.0 shifr-svyaz-setup:0.2.0
+mkdir "$package_dir/bin"
+docker run --rm --pull never --network none --entrypoint /bin/cat shifr-svyaz-setup:0.2.0 /usr/local/bin/shifrctl > "$package_dir/bin/shifrctl-linux"
+chmod 755 "$package_dir/bin/shifrctl-linux"
+cp compose.yaml compose.setup.yaml shifrctl change-ip.py "$package_dir/"
 cp scripts/start-offline.sh "$package_dir/start.sh"
 mkdir -p "$package_dir/docs" "$package_dir/docker/postgres" "$package_dir/scripts"
 cp docker/postgres/init.sql "$package_dir/docker/postgres/"
@@ -25,9 +28,9 @@ cp docs/organization.md docs/certificates-sre.md docs/broker.md "$package_dir/do
 (
   cd "$package_dir"
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum images.tar > images.tar.sha256
+    sha256sum images.tar bin/shifrctl-linux > images.tar.sha256
   else
-    shasum -a 256 images.tar > images.tar.sha256
+    shasum -a 256 images.tar bin/shifrctl-linux > images.tar.sha256
   fi
 )
 if [ "$(id -u)" = 0 ] && [ "${SUDO_UID:-0}" != 0 ]; then

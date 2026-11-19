@@ -22,7 +22,7 @@ if [ ! -f .env ]; then
     exit 1
   fi
   docker compose -f compose.setup.yaml build
-  docker compose -f compose.setup.yaml run --rm --user "$setup_uid:$setup_gid" setup --ip "$1"
+  docker compose -f compose.setup.yaml run --rm --user "$setup_uid:$setup_gid" setup init "$1"
 fi
 lan_ip=$(awk -F= '$1 == "LAN_IP" { print $2; exit }' .env)
 if [ -z "$lan_ip" ]; then
@@ -30,7 +30,7 @@ if [ -z "$lan_ip" ]; then
   exit 1
 fi
 if [ "$#" -gt 0 ] && [ "$1" != "$lan_ip" ]; then
-  printf '%s\n' 'Уже настроен другой LAN-IP. Выполните ./change-ip.py --compose <новый-IP>.' >&2
+  printf '%s\n' 'Уже настроен другой LAN-IP. Выполните ./shifrctl set-ip --compose <новый-IP>.' >&2
   exit 1
 fi
 sh scripts/ensure-db-password.sh

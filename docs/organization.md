@@ -170,7 +170,7 @@ bash scripts/export-offline.sh /absolute/path/to/shifr-offline
 ```
 
 Если Docker требует sudo, запустите эту команду через sudo. Скрипт упаковывает пять
-образов, включая PostgreSQL 17, и сохраняет `images.tar` и SHA-256, Compose, инструкции и автономный `start.sh`.
+образов, включая PostgreSQL 17, и сохраняет `images.tar` и SHA-256, Compose, инструкции, автономный `start.sh` и готовый `shifrctl` для Linux той же архитектуры.
 В пакет **не включаются** текущие аккаунты, базы, ключи и `.env`. Перенесите весь
 каталог пакета доверенным способом. На целевом Linux заранее должны быть установлены
 Docker Engine и Compose v2; Node.js, npm, Git и OpenSSL на хосте не требуются.
@@ -189,10 +189,10 @@ sudo bash start.sh 192.168.1.10
 
 После запуска создайте первого администратора командами выше и установите
 `runtime/tls/ca.crt` на клиентах по [инструкции SRE](certificates-sre.md).
-При смене IP следуйте разделу перевыпуска сертификата, а не повторной настройке.
+Для смены IP выполните `./shifrctl set-ip <новый-IP>`. Для планового продления выполните `./shifrctl renew-cert`.
 Для обновления действующего офлайн-сервера остановите старую версию и сделайте копию по инструкции выше.
 В каталоге существующей установки обновите файлы из пакета, включая `docker/postgres/init.sql`,
-`scripts/` и `start.sh`. Сохраните конфигурацию и данные. Выполните
+`scripts/`, `start.sh`, `shifrctl` и `bin/shifrctl-linux`. Сохраните конфигурацию и данные. Выполните
 `sha256sum -c images.tar.sha256`, затем `docker load -i images.tar` и `bash start.sh`.
 
 Compose публикует только Nginx на LAN-IP:8443; API/брокер доступны лишь внутри Docker.
