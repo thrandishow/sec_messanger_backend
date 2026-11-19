@@ -1,0 +1,14 @@
+[Unit]
+Description=Shifr message broker
+PartOf=shifr.target
+
+[Service]
+Type=exec
+WorkingDirectory=%h/.local/share/shifr-svyaz
+EnvironmentFile=%h/.local/share/shifr-svyaz/broker.env
+Environment=BROKER_BIND=127.0.0.1:7000
+ExecStart="%h/.local/share/shifr-svyaz/current/shifr-broker"
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true

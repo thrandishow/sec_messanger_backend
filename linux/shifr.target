@@ -1,0 +1,7 @@
+[Unit]
+Description=Shifr LAN messenger
+Wants=shifr-postgres.service shifr-broker.service shifr-api.service shifr-web.service
+After=shifr-postgres.service shifr-broker.service shifr-api.service shifr-web.service
+
+[Install]
+WantedBy=default.target

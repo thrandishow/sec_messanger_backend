@@ -1,0 +1,15 @@
+[Unit]
+Description=Shifr HTTPS web interface and reverse proxy
+Wants=shifr-api.service
+After=shifr-api.service
+PartOf=shifr.target
+
+[Service]
+Type=exec
+WorkingDirectory=%h/.local/share/shifr-svyaz
+ExecStart="%h/.local/share/shifr-svyaz/nginx" -p "%h/.local/share/shifr-svyaz/" -c nginx.conf -e stderr -g "daemon off;"
+KillSignal=SIGQUIT
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true

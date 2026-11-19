@@ -1,0 +1,16 @@
+[Unit]
+Description=Shifr PostgreSQL
+PartOf=shifr.target
+
+[Service]
+Type=exec
+WorkingDirectory=%h/.local/share/shifr-svyaz
+RuntimeDirectory=shifr-postgres
+RuntimeDirectoryMode=0700
+ExecStart="%h/.local/share/shifr-svyaz/pg-bin/postgres" -D pgdata -h "" -k "%t/shifr-postgres" -p 5432
+KillMode=mixed
+KillSignal=SIGINT
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true

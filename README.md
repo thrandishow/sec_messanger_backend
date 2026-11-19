@@ -46,7 +46,20 @@
 - Next.js UI: вход, управление аккаунтами, чаты, личные диалоги, участники,
   непрочитанные сообщения, черновики в памяти вкладки и переподключение.
 
-## Запуск в локальной сети
+## Запуск в Linux без Docker
+
+Из `project_back` выполните от обычного пользователя, подставив LAN-IP этого сервера:
+
+```bash
+./start-linux.sh 192.168.1.10
+```
+
+Скрипт собирает проект и запускает PostgreSQL, брокер, API и Nginx как службы
+`systemd --user`. Откройте `https://192.168.1.10:8443`. Для первого входа выполните
+`./start-linux.sh admin`. Следующий запуск — `./start-linux.sh`, остановка —
+`systemctl --user stop shifr.target`. [Зависимости, автозапуск и перенос данных](docs/linux.md).
+
+## Запуск в локальной сети через Docker Compose
 
 На сервере нужен только **Docker с Compose v2** (Docker Desktop на macOS/Windows
 или Docker Engine на Linux). Для `start.sh` на Windows используйте WSL.
@@ -184,7 +197,7 @@ cargo build --release --locked --manifest-path api/Cargo.toml
 cargo build --release --locked --manifest-path broker/Cargo.toml
 ```
 
-Для запуска без Docker подготовьте локальную PostgreSQL 17, базу и роль-владельца.
+Для ручной разработки API без systemd подготовьте локальную PostgreSQL 17, базу и роль-владельца.
 Экспортируйте параметры из созданного установщиком файла `.env`
 в двух терминалах (`set -a; . ./.env; set +a`). Для API задайте `PGHOST`, `PGPORT`, `PGDATABASE`,
 `PGUSER` и `PGPASSWORD` для своей БД либо `DATABASE_URL`. Для импорта старой базы

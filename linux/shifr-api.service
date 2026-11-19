@@ -1,0 +1,20 @@
+[Unit]
+Description=Shifr Rust API and WebSocket gateway
+Wants=shifr-postgres.service shifr-broker.service
+After=shifr-postgres.service shifr-broker.service
+PartOf=shifr.target
+
+[Service]
+Type=exec
+WorkingDirectory=%h/.local/share/shifr-svyaz
+EnvironmentFile=%h/.local/share/shifr-svyaz/broker.env
+EnvironmentFile=%h/.local/share/shifr-svyaz/native.env
+Environment="DATABASE_URL=host=%t/shifr-postgres user=shifr dbname=shifr"
+Environment=TLS_CERT_PATH=runtime/tls/server.crt TLS_KEY_PATH=runtime/tls/server.key
+Environment=HOST=127.0.0.1 PORT=9443 TRUST_PROXY=1
+Environment=BROKER_HOST=127.0.0.1 BROKER_PORT=7000
+ExecStart="%h/.local/share/shifr-svyaz/current/shifr-api"
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
